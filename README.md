@@ -12,7 +12,7 @@ PPO/DQN agents train against adaptive fraudsters and are benchmarked against thr
 
 ```
 FrictionRL/
-├── src/        # environment, agents, baselines
+├── frictionrl/ # environment, agents, baselines
 ├── results/    # logs, plots, saved models
 └── requirements.txt
 ```

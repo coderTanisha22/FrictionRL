@@ -7,3 +7,6 @@ venv/
 .idea/
 results/*
 !results/.gitkeep
+frictionrl_old/
+data/ieee-fraud-detection/
+data/*.npz
