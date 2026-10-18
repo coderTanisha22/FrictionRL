@@ -57,3 +57,18 @@ def test_otp_fatigue_increases_churn():
         churned += info["stats"]["churned"]
     assert churned > 250          # OTP on every transaction drives most genuine users away
 
+
+def test_vi_equals_pi():
+    T, R, N, start = learn_model(FrictionEnv(mode="discrete"), n_episodes=3000)
+    _, _, pi_vi, _ = value_iteration(T, R)
+    _, _, pi_pi, _ = policy_iteration(T, R)
+    assert (pi_vi == pi_pi).mean() > 0.99
+    env = LearnedMDPEnv(T, R, start)
+    s, _ = env.reset(seed=0)
+    assert 0 <= s < N_DISCRETE_STATES
+
+
+def test_baselines_run():
+    obs, _ = FrictionEnv().reset(seed=0)
+    for p in BASELINES.values():
+        assert p(obs) in (0, 1, 2)
