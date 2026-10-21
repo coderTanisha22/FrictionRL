@@ -199,6 +199,37 @@ def main():
     ax.set_title(f"{best.upper()} policy behaviour (dotted = genuine sessions)", fontsize=8, loc="left")
     fig.savefig(f"{F}/fig6_behaviour.png")
     plt.close(fig)
+
+    # ------------------------------------------------ results table (markdown)
+    cols = ["net_rs_per_session", "fraud_loss_rs_per_session", "fraud_txn_completed_pct", "churn_pct",
+            "false_block_pct", "otp_per_session"]
+    hdr = ["Agent", "Net Rs/session", "Fraud loss Rs/session", "Fraud txns completed %", "Churn %",
+           "False-block %", "OTPs/session"]
+    lines = ["| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
+    for (agent, fam), r in agg.iterrows():
+        cells = []
+        for c in cols:
+            m, s = r[(c, "mean")], r[(c, "std")]
+            cells.append(f"{m:,.1f}" + (f" ± {s:,.1f}" if not np.isnan(s) and s > 0 else ""))
+        lines.append(f"| {agent} | " + " | ".join(cells) + " |")
+    pl_info = logs["planning"]
+    extra = [
+        "",
+        f"Value iteration: {pl_info['vi_iterations']} sweeps to converge (tol 1e-6). "
+        f"Policy iteration: {pl_info['pi_iterations']} improvement steps "
+        f"(policy changes per step: {pl_info['pi_changes']}). "
+        f"VI and PI policies identical on {100 * pl_info['vi_pi_same_policy']:.0f}% of states.",
+    ]
+    if os.path.exists(f"{R}/sensitivity_ltv.csv"):
+        sv = pd.read_csv(f"{R}/sensitivity_ltv.csv")
+        sv = sv[(sv.algo == "ppo") & (sv.seed == 0)].sort_values("ltv")
+        extra += ["", "PPO sensitivity to customer lifetime value (LTV):", "",
+                  "| LTV (Rs) | OTPs/session | Churn % | Fraud loss Rs/session |", "|---|---|---|---|"]
+        for _, r in sv.iterrows():
+            extra.append(f"| {r.ltv:,.0f} | {r.otp_per_session:.2f} | {r.churn_pct:.1f} | "
+                         f"{r.fraud_loss_rs_per_session:,.0f} |")
+    open(f"{R}/results_table.md", "w").write("\n".join(lines + extra) + "\n")
+    print(open(f"{R}/results_table.md").read())
     print("figures ->", F)
 
 
