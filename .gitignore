@@ -5,8 +5,7 @@ venv/
 .ipynb_checkpoints/
 .vscode/
 .idea/
-results/*
-!results/.gitkeep
+results/behaviour_trace_*.csv
 frictionrl_old/
 data/ieee-fraud-detection/
 data/*.npz
