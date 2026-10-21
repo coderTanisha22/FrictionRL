@@ -126,6 +126,79 @@ def main():
     ax.set_title("Fraud loss vs. churn (better = bottom-left)", fontsize=8, loc="left")
     fig.savefig(f"{F}/fig3_pareto.png")
     plt.close(fig)
+
+    # ------------------------------------------------ Fig 4: Q-learning vs value iteration
+    fig, axes = plt.subplots(2, 1, figsize=(3.5, 3.3), sharex=True)
+    for i, (key, lab) in enumerate([("markov_check", "on learned MDP (exactly Markov)"),
+                                    ("egreedy_0", "on real simulator (hidden fraudster)")]):
+        l = logs["qlogs"][key]
+        ep = np.array([r["episode"] for r in l]) / 1e3
+        axes[0].plot(ep, np.array([r["mean_abs_q_err"] for r in l]) * RS, color=C[i], label=lab)
+        axes[1].plot(ep, np.array([r["policy_agreement"] for r in l]) * 100, color=C[i], label=lab)
+    axes[0].set_ylabel("mean |Q - Q*| (Rs)")
+    axes[0].set_ylim(bottom=0)
+    axes[1].set_ylabel("same action as VI (%)")
+    axes[1].set_ylim(80, 100)
+    axes[1].set_xlabel("Q-learning episodes (thousands)")
+    axes[0].legend(fontsize=6.5)
+    fig.savefig(f"{F}/fig4_q_vs_vi.png")
+    plt.close(fig)
+
+    # ------------------------------------------------ Fig 5: learned policy maps (VI vs Q-learning)
+    pl = np.load(f"{R}/planning.npz")
+    Qe = np.load(f"{R}/Q_explfn.npy")
+    Nvisit = pl["N"][:-1].sum(1)
+    acts = ["A", "O", "B"]
+    acol = [C[0], C[3], C[7]]
+    rows_spec = [(n, f, p) for n in range(3) for f in range(2) for p in range(2) if not (f and p)]
+    cols_spec = [(a, fl) for a in range(3) for fl in range(3)]
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.0), sharey=True)
+    for ax, pol, title in [(axes[0], pl["pi"][:-1], "Model-based value iteration"),
+                           (axes[1], Qe.argmax(1), "Tabular Q-learning (expl. fn)")]:
+        for r_i, (n, f, p) in enumerate(rows_spec):
+            for c_i, (a, fl) in enumerate(cols_spec):
+                # session not risky, not blocked
+                idx = ((((((a * 3 + fl) * 3 + n) * 2 + f) * 2 + p) * 2 + 0) * 2 + 0)
+                if Nvisit[idx] < 30:
+                    ax.add_patch(plt.Rectangle((c_i, r_i), 1, 1, color="#f3f2ee"))
+                    continue
+                act = int(pol[idx])
+                ax.add_patch(plt.Rectangle((c_i + 0.04, r_i + 0.04), 0.92, 0.92, color=acol[act]))
+                ax.text(c_i + 0.5, r_i + 0.5, acts[act], ha="center", va="center", color="white", fontsize=7,
+                        fontweight="bold")
+        ax.set_xlim(0, 9); ax.set_ylim(0, len(rows_spec)); ax.invert_yaxis()
+        ax.set_xticks(np.arange(9) + 0.5)
+        ax.set_xticklabels([f"{['norm', 'high', 'v.high'][a]}\n{fl}f" for a, fl in cols_spec], fontsize=6)
+        ax.set_yticks(np.arange(len(rows_spec)) + 0.5)
+        ax.set_yticklabels([f"OTPs={n}{' failed' if f else ''}{' passed' if p else ''}" for n, f, p in rows_spec],
+                           fontsize=6.5)
+        ax.grid(False)
+        ax.set_title(title, fontsize=9, loc="left")
+        ax.set_xlabel("amount bucket / # risk flags")
+    fig.text(0.5, -0.1, "A = approve   O = OTP step-up   B = block   (grey = state rarely visited)",
+             ha="center", fontsize=7, color=INK2)
+    fig.savefig(f"{F}/fig5_policy_maps.png")
+    plt.close(fig)
+
+    # ------------------------------------------------ Fig 6: behaviour around the takeover
+    best = logs["best_deep"]
+    tr = pd.read_csv(f"{R}/behaviour_trace_{best}.csv")
+    tk = tr[tr.takeover == 1].dropna(subset=["rel"])
+    tk = tk[(tk.rel >= -4) & (tk.rel <= 6)]
+    share = tk.groupby("rel").action.value_counts(normalize=True).unstack(fill_value=0) * 100
+    gen = tr[tr.takeover == 0].action.value_counts(normalize=True) * 100
+    fig, ax = plt.subplots(figsize=(3.5, 2.5))
+    for a, lab, col in [(1, "OTP", C[3]), (2, "Block", C[7])]:
+        if a in share:
+            ax.plot(share.index, share[a], "-o", ms=3, color=col, label=f"{lab} (taken-over sessions)")
+        ax.axhline(gen.get(a, 0), color=col, ls=":", lw=1.2)
+    ax.axvline(0, color=INK2, lw=0.8)
+    ax.set_xlabel("transactions relative to takeover (0 = first fraudulent)")
+    ax.set_ylabel("% of decisions")
+    ax.legend(fontsize=6.5, loc="upper right")
+    ax.set_title(f"{best.upper()} policy behaviour (dotted = genuine sessions)", fontsize=8, loc="left")
+    fig.savefig(f"{F}/fig6_behaviour.png")
+    plt.close(fig)
     print("figures ->", F)
 
 
