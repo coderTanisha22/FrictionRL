@@ -1,0 +1,65 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[a4paper,margin=0.55in,columnsep=0.22in]{geometry}
+\usepackage{amsmath,amssymb,graphicx,booktabs,hyperref,xcolor,titlesec,enumitem}
+\usepackage[font=footnotesize,labelfont=bf,skip=2pt]{caption}
+\hypersetup{colorlinks=true,urlcolor=blue!60!black,linkcolor=black}
+\titlespacing*{\section}{0pt}{4pt}{2pt}
+\titleformat{\section}{\normalsize\bfseries}{\thesection}{0.5em}{}
+\setlist{nosep,leftmargin=*}
+\setlength{\parskip}{1pt}
+
+\title{\vspace{-0.6in}\textbf{FrictionRL: Learning When to Ask for an OTP}\\[1pt]
+\large Reinforcement Learning for Adaptive Step-Up Authentication in Digital Payments}
+\author{Tanisha Ray (B24CM1061) \quad Cherry Aggarwal (B24CM1016)\\
+\small CSL3090 Artificial Intelligence, IIT Jodhpur \quad
+GitHub: \url{https://github.com/<USER>/frictionrl}}
+\date{\vspace{-0.35in}}
+
+\begin{document}
+\maketitle
+
+\section{Problem}
+Every UPI or card payment receives one of three decisions: \emph{approve}, \emph{step-up} (OTP), or \emph{block}.
+Static rules face a trade-off: lax rules let a fraudster who has taken over an account drain it; strict rules
+bury genuine users in OTPs and false blocks until they leave the platform. The decision is \textbf{sequential}:
+(i) friction compounds---each OTP raises the chance that the next one makes a genuine user quit;
+(ii) stopping a fraudster early prevents all of their later transactions;
+(iii) an OTP \emph{gathers information}---a failed OTP is strong evidence of takeover;
+(iv) the attacker adapts---a blocked fraudster retries with a smaller amount.
+A per-transaction classifier optimises none of these. We formulate a user session as an MDP and optimise
+expected cumulative \emph{rupees}.
+
+\section{RL Formulation}
+\textbf{Episode.} One user session of up to $H{=}20$ transactions. With probability $0.15$ the account is taken
+over at a uniformly random step $t_0\in[2,14]$; the fraud flag is \emph{hidden}. The fraudster later cashes out
+(w.p.\ 0.3 per transaction) or gives up when stopped.
+
+\textbf{State space} $\mathcal{S}\subset\mathbb{R}^{11}$: current transaction (log of amount relative to the
+user's usual amount; new device; new payee; odd hour; burst), session context (fraction of risky transactions so
+far; progress $t/H$) and the agent's own history (\#OTPs issued, OTP-failed seen, OTP-passed seen, \#blocks).
+The history features act as sufficient statistics for the hidden variables (fraud presence, user patience),
+making the observation approximately Markov---the true problem is a POMDP.
+For tabular methods we aggregate to $|\mathcal{S}_d|{=}432$ states (amount$\times$flags$\times$\#OTP$\times$
+failed$\times$passed$\times$risky$\times$blocked).
+
+\textbf{Action space} $\mathcal{A}=\{\textsc{Approve},\textsc{OTP},\textsc{Block}\}$ (discrete, $|\mathcal{A}|{=}3$).
+
+\textbf{Reward} (rupees, scaled by $10^{-3}$ for training), for transaction amount $x$:
+\begin{equation*}\scriptsize
+\begin{aligned}
+R ={}& 0.02x\,\mathbf{1}_{\text{gen.\ done}} - (x{+}200)\,\mathbf{1}_{\text{fraud done}} - 2\,\mathbf{1}_{\text{OTP}}
+- 50\,\mathbf{1}_{\text{gen.\ blocked}}\\
+&- 3000\,\mathbf{1}_{\text{churn}} - 1500\,\mathbf{1}_{\text{gen.\ frozen}}.
+\end{aligned}
+\end{equation*}
+There is deliberately \emph{no bonus for catching fraud}: only money counts, so ``block everything'' is not rewarded.
+$\gamma{=}0.99$; churn and freezing (2nd block) are absorbing terminal states.
+
+\textbf{Dynamics $T$} (simulator). Transaction content comes from a source: a synthetic generator with deliberately
+overlapping genuine/fraud distributions (default) or real feature rows replayed from IEEE-CIS (customers rebuilt
+with the \texttt{card1+addr1+D1} uid). Reactions---which no dataset records---are simulated:
+genuine OTP pass $0.97$; churn after OTP $=0.01+0.04\cdot\#\text{prev OTPs}$; churn after a false block
+$=0.2+0.2\cdot\#\text{prev blocks}$; fraudster beats OTP $0.15$ (SIM-swap); quits after a failed OTP $0.7$;
+retries at half the amount after a block $0.5$.
+
+\end{document}

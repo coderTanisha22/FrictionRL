@@ -9,3 +9,7 @@ results/behaviour_trace_*.csv
 frictionrl_old/
 data/ieee-fraud-detection/
 data/*.npz
+report/*.aux
+report/*.log
+report/*.out
+report/*.pdf
