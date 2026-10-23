@@ -74,6 +74,73 @@ $\alpha_n{=}n^{-0.6}$, with $\epsilon$-greedy (decaying) or exploration function
 (2048-step rollouts, GAE $\lambda{=}0.95$, clip $\epsilon{=}0.2$), 500k steps each, Stable-Baselines3.
 \end{itemize}
 
+\section{Results}
+All agents are evaluated on 5{,}000 held-out sessions (unseen seeds); learned agents over 3 training seeds.
+
+\begin{table}[h]\centering\footnotesize\setlength{\tabcolsep}{3pt}
+\caption{Held-out results (mean $\pm$ std over 3 seeds). Net = rupees per session (higher is better).}
+\label{tab:res}
+\begin{tabular}{lrrrr}\toprule
+Agent & Net & Fraud loss & Churn \% & OTPs\\\midrule
+Always-Approve & $-1517$ & 2116 & 0.0 & 0.0\\
+Always-OTP & $-2886$ & 40 & 100.0 & 6.7\\
+Amount threshold & $-171$ & 457 & 6.7 & 1.0\\
+Rule base (Lec 16) & $-155$ & 475 & 5.6 & 0.5\\\midrule
+Model-based VI & 178 & 373 & 1.4 & 0.4\\
+Q-learning ($\epsilon$-greedy) & $200{\scriptstyle\pm49}$ & 220 & 5.0 & 1.4\\
+Q-learning (expl.\ fn) & $159{\scriptstyle\pm65}$ & 200 & 6.3 & 1.4\\
+Linear approx.\ Q & $10{\scriptstyle\pm97}$ & 504 & 2.5 & 1.2\\
+DQN & $\mathbf{315}{\scriptstyle\pm21}$ & 238 & 1.4 & 0.4\\
+PPO & $299{\scriptstyle\pm30}$ & 273 & \textbf{0.9} & 0.5\\\bottomrule
+\end{tabular}\end{table}
+
+\begin{figure}[t]\centering
+\includegraphics[width=0.9\columnwidth]{../results/figures/fig3_pareto.png}
+\caption{Fraud loss vs.\ churn. The amount-threshold rule swept over 13 thresholds traces the best a static rule
+can do; all learned agents except linear Q sit below and left of it.}\label{fig:pareto}
+\end{figure}
+\begin{figure*}[t]\centering
+\includegraphics[width=0.82\textwidth]{../results/figures/fig1_learning_curves.png}
+\caption{Training curves (dashed: rule base). DQN's training return degrades after $\sim$150k steps
+(moving-target instability), so for both deep agents we keep the weights that score best on held-out
+\emph{validation} sessions (dots), a seed range disjoint from training and test.}
+\label{fig:curves}\end{figure*}
+\begin{figure}[t]\centering
+\includegraphics[width=0.92\columnwidth]{../results/figures/fig4_q_vs_vi.png}
+\caption{Tabular Q-learning vs.\ value iteration's $Q^*$. On the learned, exactly-Markov MDP, Q-learning
+converges to $Q^*$ (99.1\% same action, mean error Rs\,14). On the real simulator agreement is 95.2\%
+(error Rs\,89): the gap is the hidden fraudster making the 432-state abstraction non-Markov.}
+\label{fig:qvi}\end{figure}
+\begin{figure}[t]\centering
+\includegraphics[width=0.85\columnwidth]{../results/figures/fig6_behaviour.png}
+\caption{Learned behaviour (DQN) in taken-over sessions, aligned at the takeover step. The agent barely
+intervenes before takeover (dotted lines = genuine sessions), then sharply escalates to OTP and block.}
+\label{fig:beh}\end{figure}
+
+\textbf{RL beats rules.} DQN and PPO earn Rs\,$\sim$300 per session versus Rs\,$-155$ for the best hand-written
+rule base---about Rs\,470 more per session---while halving fraud loss (Rs\,475$\to$238) and cutting churn
+from 5.6\% to 0.9--1.4\% with fewer OTPs (Table~\ref{tab:res}, Fig.~\ref{fig:pareto}). Static rules cannot
+reach this region because they ignore session context and their own past actions.
+
+\textbf{Planning vs.\ learning.} Value iteration converged in 226 sweeps; policy iteration reached the
+\emph{identical} policy in 5 improvement steps (182, 80, 33, 9, 0 states changed). Model-free Q-learning
+(Rs\,200) beat model-based VI (Rs\,178): the learned model is built on aggregated, non-Markov states,
+so planning on it is biased, while Q-learning learns from real outcomes (Fig.~\ref{fig:qvi}).
+The exploration function learned faster early but reached similar final value to decaying $\epsilon$-greedy.
+
+\textbf{What was learned.} The agent learned to stay silent on normal sessions and escalate at takeover
+(Fig.~\ref{fig:beh}). Linear-Q weights are directly interpretable: the OTP action carries weight $-0.36$
+on \#OTPs issued (learned OTP fatigue) and BLOCK carries $-3.1$ on \#blocks (a second block freezes the
+account), while \emph{new device} pushes towards BLOCK ($+0.14$) and away from APPROVE ($-0.12$).
+Linear Q is the weakest learner: states sharing features can differ in value.
+
+\textbf{Sensitivity.} Retraining PPO with customer lifetime value Rs\,1000/3000/8000 shifts the policy as
+intended: OTPs per session 0.98/0.49/0.33, churn 2.2/0.8/0.3\%, fraud loss Rs\,203/309/344.
+
+\textbf{Limitations and next steps.} User and fraudster reactions are simulated (no dataset records
+counterfactual OTP responses); transaction content can be replayed from IEEE-CIS via the included
+builder. Next: an adversarial fraudster trained by self-play, and a recurrent policy for the POMDP.
+
 \small
 \begin{thebibliography}{9}\setlength{\itemsep}{0pt}
 \bibitem{aima} S.~Russell, P.~Norvig. \emph{Artificial Intelligence: A Modern Approach}, 4th ed., 2021.
