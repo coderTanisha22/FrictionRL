@@ -13,3 +13,4 @@ report/*.aux
 report/*.log
 report/*.out
 report/*.pdf
+results_ieee/behaviour_trace_*.csv
