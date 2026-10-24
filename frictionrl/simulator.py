@@ -66,6 +66,8 @@ class IEEECISSource(SyntheticSource):
     The file holds two pools of rows [log_amount_ratio, new_device, new_payee, odd_hour, burst]:
     one from genuine transactions and one from fraud transactions. Each sampled transaction
     is a real row; session structure and reactions remain simulated.
+    If the file also holds user_mu_<split> (per-customer mean log amount), each session's
+    typical amount is drawn from real customers; older files fall back to the synthetic range.
     """
 
     def __init__(self, cfg: SimConfig, path: str = "data/ieee_features.npz", split: str = "train"):
@@ -75,6 +77,13 @@ class IEEECISSource(SyntheticSource):
         d = np.load(path)
         self.gen = d[f"genuine_{split}"]
         self.fr = d[f"fraud_{split}"]
+        key = f"user_mu_{split}"
+        self.user_mu = d[key] if key in d.files and len(d[key]) else None
+
+    def sample_user(self, rng: np.random.Generator) -> float:
+        if self.user_mu is None:
+            return super().sample_user(rng)
+        return float(self.user_mu[rng.integers(len(self.user_mu))])
 
     def _row(self, rng, pool, user_mu) -> Txn:
         lr, nd, npy, oh, b = pool[rng.integers(len(pool))]

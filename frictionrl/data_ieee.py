@@ -16,6 +16,10 @@ For each transaction we compute the same 5 per-transaction features the simulato
     odd_hour         : transaction hour in [0, 5]
     burst            : < 10 minutes since the customer's previous transaction
 Customers are split 80/20 into train/test pools by uid, so test sessions use unseen customers.
+Each pool also stores every customer's mean log(TransactionAmt) as user_mu_train / user_mu_test,
+so the simulator can sample a real "typical amount" for each session's user.
+IEEE-CIS amounts are in US dollars; user_mu is converted to rupees (+ log INR_PER_USD) so amounts
+match the rupee costs in config.py. log_amount_ratio is a ratio, so it needs no conversion.
 """
 from __future__ import annotations
 
@@ -26,11 +30,13 @@ import zlib
 import numpy as np
 import pandas as pd
 
+INR_PER_USD = 85.0   # set to the current exchange rate (or pass --inr-per-usd)
+
 USECOLS = ["TransactionID", "isFraud", "TransactionDT", "TransactionAmt", "card1", "addr1", "D1",
            "R_emaildomain"]
 
 
-def build(raw_dir: str) -> dict:
+def build(raw_dir: str, inr_per_usd: float = INR_PER_USD) -> dict:
     tx = pd.read_csv(os.path.join(raw_dir, "train_transaction.csv"), usecols=USECOLS)
     idp = os.path.join(raw_dir, "train_identity.csv")
     if os.path.exists(idp):
@@ -66,11 +72,13 @@ def build(raw_dir: str) -> dict:
         part = tx[m]
         out[f"genuine_{split}"] = part.loc[part.isFraud == 0, cols].to_numpy(np.float32)
         out[f"fraud_{split}"] = part.loc[part.isFraud == 1, cols].to_numpy(np.float32)
+        out[f"user_mu_{split}"] = (la[m].groupby(part.uid).mean() + np.log(inr_per_usd)).to_numpy(np.float32)
     sessions = g.size()
     print(f"{len(tx):,} transactions, {tx.uid.nunique():,} reconstructed customers, "
           f"{(sessions >= 5).sum():,} with >= 5 transactions, fraud rate {tx.isFraud.mean():.2%}")
     for k, v in out.items():
         print(f"  {k:14s} {len(v):>8,} rows   feature means {np.round(v.mean(0), 3)}")
+    out["inr_per_usd"] = np.array(inr_per_usd, dtype=np.float32)
     return out
 
 
@@ -78,6 +86,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", default="data/ieee-fraud-detection")
     ap.add_argument("--out", default="data/ieee_features.npz")
+    ap.add_argument("--inr-per-usd", type=float, default=INR_PER_USD,
+                    help="exchange rate used to convert dollar amounts to rupees")
     a = ap.parse_args()
-    np.savez_compressed(a.out, **build(a.raw))
+    np.savez_compressed(a.out, **build(a.raw, a.inr_per_usd))
     print("saved", a.out)
