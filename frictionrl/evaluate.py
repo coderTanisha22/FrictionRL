@@ -12,8 +12,8 @@ VAL_SEED_OFFSET = 500_000_000    # validation sessions (model selection) overlap
 
 
 def run_policy(policy, n_episodes=5_000, cfg: SimConfig | None = None, source=None,
-               seed=0, log_actions=False, seed_offset=TEST_SEED_OFFSET):
-    env = FrictionEnv(cfg, mode="continuous", source=source, split="test")
+               seed=0, log_actions=False, seed_offset=TEST_SEED_OFFSET, split="test"):
+    env = FrictionEnv(cfg, mode="continuous", source=source, split=split)
     rows, trace = [], []
     for ep in range(n_episodes):
         obs, _ = env.reset(seed=seed_offset + seed * 100_000 + ep)

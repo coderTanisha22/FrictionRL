@@ -44,15 +44,17 @@ class KeepBestOnValidation(BaseCallback):
     disjoint from both training and test) and keep a copy of the best weights. Standard model
     selection: deep Q-learning in particular can degrade late in training."""
 
-    def __init__(self, cfg, every=50_000, n_sessions=1_000):
+    def __init__(self, cfg, every=50_000, n_sessions=1_000, source=None):
         super().__init__()
-        self.cfg, self.every, self.n = cfg, every, n_sessions
+        self.cfg, self.every, self.n, self.source = cfg, every, n_sessions, source
         self.best, self.best_params, self.history = -np.inf, None, []
 
     def _on_step(self):
         if self.num_timesteps % self.every == 0:
             from .evaluate import VAL_SEED_OFFSET, run_policy
-            df = run_policy(SB3Policy(self.model), self.n, cfg=self.cfg, seed_offset=VAL_SEED_OFFSET)
+            # validation sessions: own seed range, and training customers only (never the test pool)
+            df = run_policy(SB3Policy(self.model), self.n, cfg=self.cfg, source=self.source,
+                            seed_offset=VAL_SEED_OFFSET, split="train")
             score = float(df["money"].mean())
             self.history.append((self.num_timesteps, score))
             if score > self.best:
@@ -71,7 +73,8 @@ def train(algo: str, timesteps: int = 300_000, seed: int = 0, cfg: SimConfig | N
         model = PPO("MlpPolicy", env, seed=seed, verbose=0, **PPO_KW)
     else:
         raise ValueError(algo)
-    cb = KeepBestOnValidation(cfg or SimConfig(), every=max(timesteps // 10, 1)) if keep_best else None
+    cb = (KeepBestOnValidation(cfg or SimConfig(), every=max(timesteps // 10, 1), source=source)
+          if keep_best else None)
     model.learn(total_timesteps=timesteps, callback=cb)
     if cb is not None and cb.best_params is not None:
         model.set_parameters(cb.best_params, exact_match=False)

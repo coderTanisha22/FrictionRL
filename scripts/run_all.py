@@ -2,6 +2,7 @@
 
     python scripts/run_all.py            # full run (~35 min on a 2-core laptop)
     python scripts/run_all.py --quick    # smoke test (~3 min)
+    python scripts/run_all.py --source ieee --out results_ieee   # replay real IEEE-CIS transactions
 """
 from __future__ import annotations
 
@@ -25,18 +26,16 @@ from frictionrl.planning import (LearnedMDPEnv, TabularPolicy, iterative_model_b
                                  policy_iteration, value_iteration)
 from frictionrl.qlearning import tabular_q_learning, train_linear_q  # noqa: E402
 
-OUT = "results"
-
-
 def sb3_job(args):
-    algo, steps, seed, ltv, eval_eps = args
+    # everything arrives in the tuple (no globals) so this works with spawn-based multiprocessing
+    algo, steps, seed, ltv, eval_eps, out, source = args
     from frictionrl.evaluate import evaluate
     from frictionrl.train_sb3 import SB3Policy, train
     cfg = SimConfig(ltv=ltv)
-    model, curve = train(algo, steps, seed, cfg=cfg)
-    os.makedirs(f"{OUT}/models", exist_ok=True)
-    model.save(f"{OUT}/models/{algo}_seed{seed}_ltv{int(ltv)}")
-    res = evaluate(SB3Policy(model), n_episodes=eval_eps, cfg=SimConfig(ltv=ltv), seed=seed)
+    model, curve = train(algo, steps, seed, cfg=cfg, source=source)
+    os.makedirs(f"{out}/models", exist_ok=True)
+    model.save(f"{out}/models/{algo}_seed{seed}_ltv{int(ltv)}")
+    res = evaluate(SB3Policy(model), n_episodes=eval_eps, cfg=SimConfig(ltv=ltv), seed=seed, source=source)
     return algo, seed, ltv, res, {k: v.tolist() for k, v in curve.items()}
 
 
@@ -44,10 +43,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--out", default="results", help="output folder (default: results)")
+    ap.add_argument("--source", default="synthetic", choices=["synthetic", "ieee"],
+                    help="where transaction content comes from")
     ap.add_argument("--deep-only", action="store_true",
                     help="reuse baseline/tabular/linear results in results/ and rerun only DQN/PPO")
     args = ap.parse_args()
-    q = args.quick
+    q, OUT, SRC = args.quick, args.out, args.source
     EVAL_EPS = 1_000 if q else 5_000
     SEEDS = [0] if q else [0, 1, 2]
     TAB_EPS = 30_000 if q else 200_000
@@ -69,15 +71,15 @@ def main():
     if not args.deep_only:
         # ---------------------------------------------------------------- 1. baselines
         for name, pol in BASELINES.items():
-            add(name, "baseline", summarize(run_policy(pol, EVAL_EPS)))
+            add(name, "baseline", summarize(run_policy(pol, EVAL_EPS, source=SRC)))
         sweep = []
         for tau in np.linspace(-0.5, 2.5, 13):
-            r = summarize(run_policy(AmountThreshold(tau), EVAL_EPS))
+            r = summarize(run_policy(AmountThreshold(tau), EVAL_EPS, source=SRC))
             sweep.append(dict(tau=float(tau), **{k: float(v) for k, v in r.items()}))
         pd.DataFrame(sweep).to_csv(f"{OUT}/threshold_sweep.csv", index=False)
 
         # ---------------------------------------------------------------- 2. model-based + VI + PI
-        denv = FrictionEnv(mode="discrete")
+        denv = FrictionEnv(mode="discrete", source=SRC)
         T, R, N, start, V, Q_star, pi_vi, mb_log = iterative_model_based(denv, rounds=3, episodes_per_round=MB_EPS)
         _, _, _, vi_deltas = value_iteration(T, R)
         _, _, pi_pi, pi_hist = policy_iteration(T, R)
@@ -85,7 +87,7 @@ def main():
                         pi_iterations=len(pi_hist), pi_changes=pi_hist,
                         vi_pi_same_policy=float((pi_vi == pi_pi).mean()))
         np.savez(f"{OUT}/planning.npz", V=V, Q=Q_star, pi=pi_vi, N=N)
-        add("Model-based VI", "planning", summarize(run_policy(TabularPolicy(pi_vi), EVAL_EPS)))
+        add("Model-based VI", "planning", summarize(run_policy(TabularPolicy(pi_vi), EVAL_EPS, source=SRC)))
 
         # ---------------------------------------------------------------- 3. tabular Q-learning
         # 3a. sanity check: Q-learning on the learned (exactly Markov) MDP must converge to VI's Q*
@@ -95,27 +97,28 @@ def main():
         qlogs = {"markov_check": check_log}
         for explore, label in [("egreedy", "Q-learning (eps-greedy)"), ("explfn", "Q-learning (expl. fn)")]:
             for seed in SEEDS:
-                Q, Nq, log = tabular_q_learning(FrictionEnv(mode="discrete"), TAB_EPS, explore=explore,
+                Q, Nq, log = tabular_q_learning(FrictionEnv(mode="discrete", source=SRC), TAB_EPS, explore=explore,
                                                 seed=seed, q_star=Q_star, eval_every=max(TAB_EPS // 40, 1))
                 qlogs[f"{explore}_{seed}"] = log
                 if seed == 0:
                     np.save(f"{OUT}/Q_{explore}.npy", Q)
-                add(label, "tabular", summarize(run_policy(TabularPolicy(Q.argmax(1)), EVAL_EPS, seed=seed)), seed)
+                add(label, "tabular", summarize(run_policy(TabularPolicy(Q.argmax(1)), EVAL_EPS, seed=seed,
+                                                           source=SRC)), seed)
 
         # ---------------------------------------------------------------- 4. linear approximate Q
         lin_logs = {}
         for seed in SEEDS:
-            agent, log = train_linear_q(FrictionEnv(mode="continuous"), LIN_EPS, seed=seed,
+            agent, log = train_linear_q(FrictionEnv(mode="continuous", source=SRC), LIN_EPS, seed=seed,
                                         eval_every=max(LIN_EPS // 30, 1))
             lin_logs[seed] = log
             if seed == 0:
                 json.dump(agent.weight_table(), open(f"{OUT}/linear_q_weights.json", "w"), indent=1, default=float)
-            add("Linear approx. Q", "approx", summarize(run_policy(agent, EVAL_EPS, seed=seed)), seed)
+            add("Linear approx. Q", "approx", summarize(run_policy(agent, EVAL_EPS, seed=seed, source=SRC)), seed)
 
     # ---------------------------------------------------------------- 5. DQN + PPO (+ LTV sensitivity)
-    jobs = [(a, SB3_STEPS, s, 3000.0, EVAL_EPS) for a in ("dqn", "ppo") for s in SEEDS]
+    jobs = [(a, SB3_STEPS, s, 3000.0, EVAL_EPS, OUT, SRC) for a in ("dqn", "ppo") for s in SEEDS]
     if not q:
-        jobs += [("ppo", SB3_STEPS, 0, ltv, EVAL_EPS) for ltv in (1000.0, 8000.0)]
+        jobs += [("ppo", SB3_STEPS, 0, ltv, EVAL_EPS, OUT, SRC) for ltv in (1000.0, 8000.0)]
     curves, sens = {}, []
     with ProcessPoolExecutor(args.workers) as ex:
         for algo, seed, ltv, res, curve in ex.map(sb3_job, jobs):
@@ -132,7 +135,7 @@ def main():
     deep = df[df.family == "deep"].groupby("agent").net_rs_per_session.mean()
     best = deep.idxmax().lower()
     model = (PPO if best == "ppo" else DQN).load(f"{OUT}/models/{best}_seed0_ltv3000")
-    _, trace = run_policy(SB3Policy(model), EVAL_EPS, log_actions=True)
+    _, trace = run_policy(SB3Policy(model), EVAL_EPS, log_actions=True, source=SRC)
     trace.to_csv(f"{OUT}/behaviour_trace_{best}.csv", index=False)
 
     # ---------------------------------------------------------------- save
@@ -141,7 +144,7 @@ def main():
     summ.to_csv(f"{OUT}/summary.csv")
     json.dump(dict(planning=planning, qlogs=qlogs, lin_logs=lin_logs, curves=curves, best_deep=best),
               open(f"{OUT}/logs.json", "w"), default=float)
-    print(f"done in {time.time() - t0:.0f}s -> now run: python scripts/make_figures.py")
+    print(f"done in {time.time() - t0:.0f}s -> now run: python scripts/make_figures.py --results {OUT}")
 
 
 if __name__ == "__main__":
