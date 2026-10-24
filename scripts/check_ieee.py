@@ -79,7 +79,7 @@ def main():
     for j, (lab, pool) in enumerate(series):
         ax.bar(x + (j - 1.5) * w, pool[:, 1:].mean(0) * 100, w, color=C[j], label=lab)
     ax.set_xticks(x)
-    ax.set_xticklabels([f.replace("_", " ") for f in FLAGS])
+    ax.set_xticklabels([f.replace("_", "\n") for f in FLAGS])   # two lines each, so labels never collide
     ax.set_ylabel("% of transactions with flag")
     ax.grid(axis="x", visible=False)
     ax.legend(fontsize=6.5)

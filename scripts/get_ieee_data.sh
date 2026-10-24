@@ -21,10 +21,13 @@ fail() { echo "error: $*" >&2; exit 1; }
 
 # 1. Kaggle CLI and credentials
 command -v kaggle >/dev/null || fail "kaggle CLI not found. Install it with: pip install kaggle"
-if [ ! -f "$HOME/.kaggle/kaggle.json" ] && [ -z "${KAGGLE_USERNAME:-}${KAGGLE_KEY:-}" ]; then
+if [ ! -f "$HOME/.kaggle/kaggle.json" ] && [ ! -f "$HOME/.kaggle/access_token" ] \
+   && [ -z "${KAGGLE_API_TOKEN:-}${KAGGLE_USERNAME:-}${KAGGLE_KEY:-}" ]; then
   fail "no Kaggle API token found.
-  1. kaggle.com -> your profile -> Settings -> API -> Create New Token (downloads kaggle.json)
-  2. mkdir -p ~/.kaggle && mv ~/Downloads/kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json"
+  1. kaggle.com -> Settings -> API -> Create New Token
+  2. new-style token (KGAT_...): echo <token> > ~/.kaggle/access_token && chmod 600 ~/.kaggle/access_token
+     old-style kaggle.json:      mv ~/Downloads/kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
+  New-style tokens need a recent CLI: pip install -U kaggle"
 fi
 
 # 2. Download (about 118 MB)

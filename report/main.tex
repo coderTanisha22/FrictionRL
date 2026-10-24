@@ -3,149 +3,177 @@
 \usepackage{amsmath,amssymb,graphicx,booktabs,hyperref,xcolor,titlesec,enumitem}
 \usepackage[font=footnotesize,labelfont=bf,skip=2pt]{caption}
 \hypersetup{colorlinks=true,urlcolor=blue!60!black,linkcolor=black}
-\titlespacing*{\section}{0pt}{4pt}{2pt}
+\titlespacing*{\section}{0pt}{5pt}{2pt}
+\titlespacing*{\subsection}{0pt}{3pt}{1pt}
 \titleformat{\section}{\normalsize\bfseries}{\thesection}{0.5em}{}
+\titleformat{\subsection}{\small\bfseries}{\thesubsection}{0.5em}{}
 \setlist{nosep,leftmargin=*}
-\setlength{\parskip}{1pt}
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
 \graphicspath{{../results/figures/}{figures/}}
 
-\title{\vspace{-0.6in}\textbf{FrictionRL: Learning When to Ask for an OTP}\\[1pt]
-\large Reinforcement Learning for Adaptive Step-Up Authentication in Digital Payments}
-\author{Tanisha Ray (B24CM1061) \quad Cherry Aggarwal (B24CM1016)\\
-\small CSL3090 Artificial Intelligence, IIT Jodhpur \quad
-GitHub: \url{https://github.com/coderTanisha22/FrictionRL}}
-\date{\vspace{-0.35in}}
+\title{\vspace{-0.6in}\textbf{FrictionRL: Learning When to Ask for an OTP}\\[2pt]
+\large Reinforcement Learning for Safer and Smoother UPI Payments}
+\author{\textbf{Team:} Tanisha Ray (B24CM1061) \quad Cherry Aggarwal (B24CM1016)\\
+\textbf{GitHub:} \url{https://github.com/coderTanisha22/FrictionRL}\\
+\small CSL3090 Artificial Intelligence, IIT Jodhpur}
+\date{\vspace{-0.4in}}
 
 \begin{document}
 \maketitle
 
-\section{Problem}
-Every UPI or card payment receives one of three decisions: \emph{approve}, \emph{step-up} (OTP), or \emph{block}.
-Static rules face a trade-off: lax rules let a fraudster who has taken over an account drain it; strict rules
-bury genuine users in OTPs and false blocks until they leave the platform. The decision is \textbf{sequential}:
-(i) friction compounds---each OTP raises the chance that the next one makes a genuine user quit;
-(ii) stopping a fraudster early prevents all of their later transactions;
-(iii) an OTP \emph{gathers information}---a failed OTP is strong evidence of takeover;
-(iv) the attacker adapts---a blocked fraudster retries with a smaller amount.
-A per-transaction classifier optimises none of these. We formulate a user session as an MDP and optimise
-expected cumulative \emph{rupees}.
+\section{Problem and Motivation}
+Every UPI payment gets one of three decisions: \emph{approve} it, ask for an \emph{OTP}, or \emph{block} it.
+Banks usually decide with fixed rules such as ``ask for an OTP above Rs\,X''. This creates a hard trade-off.
+If the rules are too relaxed, a fraudster who has taken over an account can empty it. If they are too strict,
+genuine users get OTP after OTP, feel annoyed, and eventually leave the app.
+
+We treat this as a \textbf{sequential decision problem}, not a one-off classification, for four reasons:
+\begin{itemize}
+\item \textbf{Friction adds up:} every extra OTP makes the next one more likely to drive the user away.
+\item \textbf{Early action pays later:} stopping a fraudster now prevents all of their later payments.
+\item \textbf{Actions give information:} a failed OTP is strong evidence that the account was taken over.
+\item \textbf{Fraudsters adapt:} a blocked fraudster often tries again with a smaller amount.
+\end{itemize}
+So we model one user session as a Markov Decision Process (MDP) and train RL agents to maximise the total
+money saved in rupees, balancing fraud loss against user friction and churn.
 
 \section{RL Formulation}
-\textbf{Episode.} One user session of up to $H{=}20$ transactions. With probability $0.15$ the account is taken
-over at a uniformly random step $t_0\in[2,14]$; the fraud flag is \emph{hidden}. The fraudster later cashes out
-(w.p.\ 0.3 per transaction) or gives up when stopped.
+An \textbf{episode} is one user session of up to $H{=}20$ payments. With probability $0.15$ a fraudster takes
+over the account at a random step $t_0\in[2,14]$. The agent is \emph{never told} when this happens; it has to
+infer it from what it sees. We use a discount factor $\gamma{=}0.99$.
 
-\textbf{State space} $\mathcal{S}\subset\mathbb{R}^{11}$: current transaction (log of amount relative to the
-user's usual amount; new device; new payee; odd hour; burst), session context (fraction of risky transactions so
-far; progress $t/H$) and the agent's own history (\#OTPs issued, OTP-failed seen, OTP-passed seen, \#blocks).
-The history features act as sufficient statistics for the hidden variables (fraud presence, user patience),
-making the observation approximately Markov---the true problem is a POMDP.
-For tabular methods we aggregate to $|\mathcal{S}_d|{=}432$ states (amount$\times$flags$\times$\#OTP$\times$
-failed$\times$passed$\times$risky$\times$blocked).
+\subsection{State Space ($\mathcal{S}$)}
+The agent observes an \textbf{11-dimensional continuous vector}, $s\in\mathbb{R}^{11}$, in three groups:
+\begin{itemize}
+\item \textbf{Current payment (5):} amount compared to the user's usual amount (log ratio), new device,
+new payee, odd hour, and burst (sent right after the previous payment).
+\item \textbf{Session context (2):} share of risky payments so far, and progress $t/H$.
+\item \textbf{Agent's own history (4):} number of OTPs asked, an OTP failed, an OTP passed, number of blocks.
+\end{itemize}
+Whether a fraudster is present is hidden, so strictly this is a POMDP. The history features summarise what the
+agent has learned so far (for example, a failed OTP), which makes the state close to Markov.
+For tabular methods we group the state into $|\mathcal{S}_d|{=}432$ discrete states
+($3$ amount levels $\times$ $3$ risk-flag levels $\times$ $3$ OTP counts $\times$ $2^4$ yes/no flags).
 
-\textbf{Action space} $\mathcal{A}=\{\textsc{Approve},\textsc{OTP},\textsc{Block}\}$ (discrete, $|\mathcal{A}|{=}3$).
+\subsection{Action Space ($\mathcal{A}$)}
+The action space is \textbf{discrete} with three actions:
+$\mathcal{A}=\{\textsc{Approve},\ \textsc{OTP},\ \textsc{Block}\}$, so $|\mathcal{A}|{=}3$.
 
-\textbf{Reward} (rupees, scaled by $10^{-3}$ for training), for transaction amount $x$:
-\begin{equation*}\scriptsize
+\subsection{Reward Function ($\mathcal{R}$)}
+The reward is the money gained or lost on each payment, in rupees (divided by $1000$ during training to keep
+the numbers small for the neural networks). For a payment of amount $x$:
+\begin{equation*}\small
 \begin{aligned}
-R ={}& 0.02x\,\mathbf{1}_{\text{gen.\ done}} - (x{+}200)\,\mathbf{1}_{\text{fraud done}} - 2\,\mathbf{1}_{\text{OTP}}
-- 50\,\mathbf{1}_{\text{gen.\ blocked}}\\
-&- 3000\,\mathbf{1}_{\text{churn}} - 1500\,\mathbf{1}_{\text{gen.\ frozen}}.
+R ={}& 0.02x\,\mathbf{1}_{\text{genuine paid}} - (x{+}200)\,\mathbf{1}_{\text{fraud paid}}
+ - 2\,\mathbf{1}_{\text{OTP}} - 50\,\mathbf{1}_{\text{genuine blocked}}\\
+&- 3000\,\mathbf{1}_{\text{user leaves}} - 1500\,\mathbf{1}_{\text{genuine account frozen}}.
 \end{aligned}
 \end{equation*}
-\textbf{Incentive design.} There is deliberately \emph{no bonus for catching fraud}: only money counts, so ``block everything'' is not rewarded.
-$\gamma{=}0.99$; churn and freezing (2nd block) are absorbing terminal states.
+\textbf{Incentive design.} The bank earns a 2\% fee on genuine payments. A fraud payment costs the full amount
+plus a Rs\,200 chargeback fee. Each OTP costs Rs\,2, and wrongly blocking a genuine user costs Rs\,50.
+If a genuine user leaves, the bank loses their lifetime value of Rs\,3000. On purpose, there is
+\textbf{no bonus for catching fraud}: only money counts, so the agent cannot score points by simply blocking
+everything. A user leaving, or the account being frozen after a second block, ends the episode.
 
-\textbf{Environment \& dynamics $T$} (simulator). Transaction content comes from a source: a synthetic generator with deliberately
-overlapping genuine/fraud distributions (default) or real feature rows replayed from IEEE-CIS (customers rebuilt
-with the \texttt{card1+addr1+D1} uid). Reactions---which no dataset records---are simulated:
-genuine OTP pass $0.97$; churn after OTP $=0.01+0.04\cdot\#\text{prev OTPs}$; churn after a false block
-$=0.2+0.2\cdot\#\text{prev blocks}$; fraudster beats OTP $0.15$ (SIM-swap); quits after a failed OTP $0.7$;
-retries at half the amount after a block $0.5$.
-
-\section{Algorithms and Baselines}
+\section{Environment and Algorithms}
+\subsection{Simulation Dynamics}
+We built our own Gymnasium environment. Payments come from a synthetic generator in which genuine and fraud
+payments \emph{overlap} (fraud tends to be about $2.5\times$ larger and more often from a new device or to a
+new payee), so one payment alone is not enough to decide. Real payment features from the Kaggle IEEE-CIS
+fraud dataset can also be replayed instead. How people react is simulated, because no dataset records it:
 \begin{itemize}
-\item \textbf{Baselines}: always-approve/OTP, random, amount threshold (swept), and a propositional rule base.
-\item \textbf{Model-based learning + VI/PI}: count $(s,a,s')$ to estimate $\hat T,\hat R$, solve with value
-iteration and policy iteration; iterate data collection with the new policy (3 rounds).
-\item \textbf{Tabular Q-learning}: $Q(s,a)\!\leftarrow\!(1{-}\alpha)Q(s,a)+\alpha[r+\gamma\max_{a'}Q(s',a')]$,
-$\alpha_n{=}n^{-0.6}$, with $\epsilon$-greedy (decaying) or exploration function $f(u,n){=}u{+}k/n$.
-\item \textbf{Approximate Q}: $Q(s,a){=}\mathbf{w}_a^\top\phi(s)$, $w_i\!\leftarrow\!w_i{+}\alpha\,\delta\,f_i(s,a)$.
-\item \textbf{DQN} (replay buffer 100k, target net synced every 1k steps, $[64,64]$ MLP) and \textbf{PPO}
-(2048-step rollouts, GAE $\lambda{=}0.95$, clip $\epsilon{=}0.2$), 500k steps each, Stable-Baselines3.
+\item A genuine user passes an OTP 97\% of the time.
+\item A genuine user leaves after an OTP with probability $0.01+0.04\times$(OTPs so far), and after a wrong
+block with $0.2+0.2\times$(blocks so far).
+\item A fraudster beats the OTP 15\% of the time (SIM swap); after failing, they give up 70\% of the time.
+\item After a block, the fraudster retries with half the amount 50\% of the time. A second block freezes the
+account.
 \end{itemize}
 
+\subsection{Baselines}
+We compare against non-learning policies: always approve, always ask for an OTP, random, an amount threshold
+(OTP above a set amount, tested at 13 thresholds), and a hand-written rule base (e.g.\ ``if an OTP failed,
+block'', ``if the amount is high and the device is new, ask for an OTP'').
+
+\subsection{Choice of RL Algorithms}
+We moved from simple to advanced methods, each matching a course lecture:
+\begin{itemize}
+\item \textbf{Model-based learning + Value/Policy Iteration:} count transitions to estimate $\hat T$ and
+$\hat R$, then solve the learned MDP with value iteration and policy iteration.
+\item \textbf{Tabular Q-learning:}
+$Q(s,a)\leftarrow(1{-}\alpha)Q(s,a)+\alpha\,[\,r+\gamma\max_{a'}Q(s',a')\,]$, with decaying $\epsilon$-greedy
+or an exploration function $f(u,n){=}u{+}k/(n{+}1)$.
+\item \textbf{Approximate Q-learning:} a linear model $Q(s,a)=\mathbf{w}_a^\top\phi(s)$, whose weights we can read.
+\item \textbf{DQN:} a neural network Q-function with a replay buffer (100k) and a target network
+(synced every 1k steps).
+\item \textbf{PPO:} an actor--critic method with a clipped objective ($\epsilon{=}0.2$) and GAE ($\lambda{=}0.95$).
+\end{itemize}
+The tabular, planning and linear methods are written from scratch in NumPy. DQN and PPO use Stable-Baselines3
+and train for 500k steps each, keeping the weights that score best on separate validation sessions.
+
 \section{Results}
-All agents are evaluated on 5{,}000 held-out sessions (unseen seeds); learned agents over 3 training seeds.
+Every agent is tested on 5{,}000 unseen sessions. Learned agents are trained with 3 random seeds.
 
 \begin{table}[h]\centering\footnotesize\setlength{\tabcolsep}{3pt}
-\caption{Held-out results (mean $\pm$ std over 3 seeds). Net = rupees per session (higher is better).}
+\caption{Test results (mean $\pm$ std over 3 seeds). Net = rupees per session; higher is better.}
 \label{tab:res}
 \begin{tabular}{lrrrr}\toprule
 Agent & Net & Fraud loss & Churn \% & OTPs\\\midrule
-Always-Approve & $-1517$ & 2116 & 0.0 & 0.0\\
-Always-OTP & $-2886$ & 40 & 100.0 & 6.7\\
+Always approve & $-1517$ & 2116 & 0.0 & 0.0\\
+Always OTP & $-2886$ & 40 & 100.0 & 6.7\\
 Amount threshold & $-171$ & 457 & 6.7 & 1.0\\
-Rule base (Lec 16) & $-155$ & 475 & 5.6 & 0.5\\\midrule
-Model-based VI & 178 & 373 & 1.4 & 0.4\\
+Rule base & $-155$ & 475 & 5.6 & 0.5\\\midrule
+Value iteration & 178 & 373 & 1.4 & 0.4\\
 Q-learning ($\epsilon$-greedy) & $200{\scriptstyle\pm49}$ & 220 & 5.0 & 1.4\\
 Q-learning (expl.\ fn) & $159{\scriptstyle\pm65}$ & 200 & 6.3 & 1.4\\
-Linear approx.\ Q & $10{\scriptstyle\pm97}$ & 504 & 2.5 & 1.2\\
+Linear Q & $10{\scriptstyle\pm97}$ & 504 & 2.5 & 1.2\\
 DQN & $\mathbf{315}{\scriptstyle\pm21}$ & 238 & 1.4 & 0.4\\
 PPO & $299{\scriptstyle\pm30}$ & 273 & \textbf{0.9} & 0.5\\\bottomrule
 \end{tabular}\end{table}
 
-\begin{figure}[t]\centering
-\includegraphics[width=0.9\columnwidth]{fig3_pareto.png}
-\caption{Fraud loss vs.\ churn. The amount-threshold rule swept over 13 thresholds traces the best a static rule
-can do; all learned agents except linear Q sit below and left of it.}\label{fig:pareto}
-\end{figure}
 \begin{figure*}[t]\centering
-\includegraphics[width=0.82\textwidth]{fig1_learning_curves.png}
-\caption{Training curves (dashed: rule base). DQN's training return degrades after $\sim$150k steps
-(moving-target instability), so for both deep agents we keep the weights that score best on held-out
-\emph{validation} sessions (dots), a seed range disjoint from training and test.}
+\includegraphics[width=0.78\textwidth]{fig1_learning_curves.png}
+\caption{Training curves (dashed line: rule base). DQN gets worse after about 150k steps, so for both deep
+agents we keep the weights that do best on validation sessions (dots).}
 \label{fig:curves}\end{figure*}
 \begin{figure}[t]\centering
-\includegraphics[width=0.92\columnwidth]{fig4_q_vs_vi.png}
-\caption{Tabular Q-learning vs.\ value iteration's $Q^*$. On the learned, exactly-Markov MDP, Q-learning
-converges to $Q^*$ (99.1\% same action, mean error Rs\,14). On the real simulator agreement is 95.2\%
-(error Rs\,89): the gap is the hidden fraudster making the 432-state abstraction non-Markov.}
-\label{fig:qvi}\end{figure}
+\includegraphics[width=0.88\columnwidth]{fig3_pareto.png}
+\caption{Fraud loss vs.\ churn. The grey curve is the best any amount threshold can do. Almost every RL
+agent sits below and to the left of it, i.e.\ better on both.}\label{fig:pareto}
+\end{figure}
 \begin{figure}[t]\centering
 \includegraphics[width=0.85\columnwidth]{fig6_behaviour.png}
-\caption{Learned behaviour (DQN) in taken-over sessions, aligned at the takeover step. The agent barely
-intervenes before takeover (dotted lines = genuine sessions), then sharply escalates to OTP and block.}
+\caption{What DQN does around the takeover step. It stays quiet before the fraudster arrives (dotted lines
+are genuine sessions), then quickly moves to OTP and block.}
 \label{fig:beh}\end{figure}
 
-\textbf{RL beats rules.} DQN and PPO earn Rs\,$\sim$300 per session versus Rs\,$-155$ for the best hand-written
-rule base---about Rs\,470 more per session---while halving fraud loss (Rs\,475$\to$238) and cutting churn
-from 5.6\% to 0.9--1.4\% with fewer OTPs (Table~\ref{tab:res}, Fig.~\ref{fig:pareto}). Static rules cannot
-reach this region because they ignore session context and their own past actions.
+\textbf{RL beats the rules.} DQN and PPO earn about Rs\,300 per session, while the best rule base loses
+Rs\,155. That is roughly Rs\,470 more per session. They also halve fraud loss (Rs\,475 to 238) and cut churn
+from 5.6\% to about 1\%, while asking for fewer OTPs (Table~\ref{tab:res}, Fig.~\ref{fig:pareto}).
+Rules cannot do this because they ignore the session history and their own past actions.
 
-\textbf{Planning vs.\ learning.} Value iteration converged in 226 sweeps; policy iteration reached the
-\emph{identical} policy in 5 improvement steps (182, 80, 33, 9, 0 states changed). Model-free Q-learning
-(Rs\,200) beat model-based VI (Rs\,178): the learned model is built on aggregated, non-Markov states,
-so planning on it is biased, while Q-learning learns from real outcomes (Fig.~\ref{fig:qvi}).
-The exploration function learned faster early but reached similar final value to decaying $\epsilon$-greedy.
+\textbf{Planning vs.\ learning.} Value iteration took 226 sweeps and policy iteration took 5 steps, and both
+gave exactly the same policy. Model-free Q-learning (Rs\,200) did slightly better than value iteration
+(Rs\,178), because the learned model is built on grouped states that hide the fraudster. As a check, on a
+fully Markov copy of the learned model, Q-learning matched the optimal policy on 99.1\% of decisions.
 
-\textbf{What was learned.} The agent learned to stay silent on normal sessions and escalate at takeover
-(Fig.~\ref{fig:beh}). Linear-Q weights are directly interpretable: the OTP action carries weight $-0.36$
-on \#OTPs issued (learned OTP fatigue) and BLOCK carries $-3.1$ on \#blocks (a second block freezes the
-account), while \emph{new device} pushes towards BLOCK ($+0.14$) and away from APPROVE ($-0.12$).
-Linear Q is the weakest learner: states sharing features can differ in value.
+\textbf{What the agent learned.} DQN stays quiet in normal sessions and reacts quickly once the account is
+taken over (Fig.~\ref{fig:beh}). The linear Q weights tell the same story: more OTPs make another OTP less
+attractive (OTP fatigue), and a second block is strongly avoided because it freezes the account.
 
-\textbf{Sensitivity.} Retraining PPO with customer lifetime value Rs\,1000/3000/8000 shifts the policy as
-intended: OTPs per session 0.98/0.49/0.33, churn 2.2/0.8/0.3\%, fraud loss Rs\,203/309/344.
+\textbf{Changing the customer value.} When we retrain PPO with a lifetime value of Rs\,1000, 3000 and 8000,
+it asks for fewer OTPs (0.98, 0.49, 0.33 per session) and churn drops (2.2, 0.8, 0.3\%). In other words, the
+more a customer is worth, the more carefully the agent avoids bothering them.
 
-\textbf{Limitations and next steps.} User and fraudster reactions are simulated (no dataset records
-counterfactual OTP responses); transaction content can be replayed from IEEE-CIS via the included
-builder. Next: an adversarial fraudster trained by self-play, and a recurrent policy for the POMDP.
+\textbf{Limitations and future work.} User and fraudster reactions are simulated, since no public data records
+them. Next, we would like to train the fraudster as a second learning agent and use a recurrent policy to
+handle the hidden state better.
 
 \small
 \begin{thebibliography}{9}\setlength{\itemsep}{0pt}
 \bibitem{aima} S.~Russell, P.~Norvig. \emph{Artificial Intelligence: A Modern Approach}, 4th ed., 2021.
-\bibitem{dqn} V.~Mnih et al. Human-level control through deep RL. \emph{Nature}, 2015.
+\bibitem{dqn} V.~Mnih et al. Human-level control through deep reinforcement learning. \emph{Nature}, 2015.
 \bibitem{ppo} J.~Schulman et al. Proximal policy optimization algorithms. arXiv:1707.06347, 2017.
 \bibitem{sb3} A.~Raffin et al. Stable-Baselines3. \emph{JMLR}, 2021.
 \bibitem{ieee} IEEE-CIS Fraud Detection, Kaggle, 2019.

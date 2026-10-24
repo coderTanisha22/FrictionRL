@@ -1,0 +1,50 @@
+{
+ "APPROVE": {
+  "bias": 1.745,
+  "log_amount_ratio": 0.265,
+  "new_device": -0.05,
+  "new_payee": -0.021,
+  "odd_hour": 0.003,
+  "burst": -0.034,
+  "risk_rate_session": -0.379,
+  "progress": -3.908,
+  "n_otp_issued": 1.195,
+  "otp_failed_seen": -0.377,
+  "otp_passed_seen": 1.629,
+  "n_blocks": -5.362,
+  "amount_x_newcontext": 0.0,
+  "amount_sq": 0.485
+ },
+ "OTP": {
+  "bias": 4.022,
+  "log_amount_ratio": 0.307,
+  "new_device": -0.012,
+  "new_payee": 0.002,
+  "odd_hour": 0.068,
+  "burst": 0.075,
+  "risk_rate_session": 0.023,
+  "progress": -4.363,
+  "n_otp_issued": -0.144,
+  "otp_failed_seen": -0.302,
+  "otp_passed_seen": 0.169,
+  "n_blocks": -4.896,
+  "amount_x_newcontext": 0.054,
+  "amount_sq": 0.595
+ },
+ "BLOCK": {
+  "bias": -2.018,
+  "log_amount_ratio": 0.01,
+  "new_device": 0.042,
+  "new_payee": 0.008,
+  "odd_hour": 0.058,
+  "burst": 0.047,
+  "risk_rate_session": 0.046,
+  "progress": 0.565,
+  "n_otp_issued": 0.086,
+  "otp_failed_seen": -0.777,
+  "otp_passed_seen": 0.013,
+  "n_blocks": -0.082,
+  "amount_x_newcontext": 0.023,
+  "amount_sq": 0.094
+ }
+}
