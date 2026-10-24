@@ -7,12 +7,13 @@
 \titleformat{\section}{\normalsize\bfseries}{\thesection}{0.5em}{}
 \setlist{nosep,leftmargin=*}
 \setlength{\parskip}{1pt}
+\graphicspath{{../results/figures/}{figures/}}
 
 \title{\vspace{-0.6in}\textbf{FrictionRL: Learning When to Ask for an OTP}\\[1pt]
 \large Reinforcement Learning for Adaptive Step-Up Authentication in Digital Payments}
 \author{Tanisha Ray (B24CM1061) \quad Cherry Aggarwal (B24CM1016)\\
 \small CSL3090 Artificial Intelligence, IIT Jodhpur \quad
-GitHub: \url{https://github.com/<USER>/frictionrl}}
+GitHub: \url{https://github.com/coderTanisha22/FrictionRL}}
 \date{\vspace{-0.35in}}
 
 \begin{document}
@@ -52,17 +53,17 @@ R ={}& 0.02x\,\mathbf{1}_{\text{gen.\ done}} - (x{+}200)\,\mathbf{1}_{\text{frau
 &- 3000\,\mathbf{1}_{\text{churn}} - 1500\,\mathbf{1}_{\text{gen.\ frozen}}.
 \end{aligned}
 \end{equation*}
-There is deliberately \emph{no bonus for catching fraud}: only money counts, so ``block everything'' is not rewarded.
+\textbf{Incentive design.} There is deliberately \emph{no bonus for catching fraud}: only money counts, so ``block everything'' is not rewarded.
 $\gamma{=}0.99$; churn and freezing (2nd block) are absorbing terminal states.
 
-\textbf{Dynamics $T$} (simulator). Transaction content comes from a source: a synthetic generator with deliberately
+\textbf{Environment \& dynamics $T$} (simulator). Transaction content comes from a source: a synthetic generator with deliberately
 overlapping genuine/fraud distributions (default) or real feature rows replayed from IEEE-CIS (customers rebuilt
 with the \texttt{card1+addr1+D1} uid). Reactions---which no dataset records---are simulated:
 genuine OTP pass $0.97$; churn after OTP $=0.01+0.04\cdot\#\text{prev OTPs}$; churn after a false block
 $=0.2+0.2\cdot\#\text{prev blocks}$; fraudster beats OTP $0.15$ (SIM-swap); quits after a failed OTP $0.7$;
 retries at half the amount after a block $0.5$.
 
-\section{Algorithms}
+\section{Algorithms and Baselines}
 \begin{itemize}
 \item \textbf{Baselines}: always-approve/OTP, random, amount threshold (swept), and a propositional rule base.
 \item \textbf{Model-based learning + VI/PI}: count $(s,a,s')$ to estimate $\hat T,\hat R$, solve with value
@@ -95,24 +96,24 @@ PPO & $299{\scriptstyle\pm30}$ & 273 & \textbf{0.9} & 0.5\\\bottomrule
 \end{tabular}\end{table}
 
 \begin{figure}[t]\centering
-\includegraphics[width=0.9\columnwidth]{../results/figures/fig3_pareto.png}
+\includegraphics[width=0.9\columnwidth]{fig3_pareto.png}
 \caption{Fraud loss vs.\ churn. The amount-threshold rule swept over 13 thresholds traces the best a static rule
 can do; all learned agents except linear Q sit below and left of it.}\label{fig:pareto}
 \end{figure}
 \begin{figure*}[t]\centering
-\includegraphics[width=0.82\textwidth]{../results/figures/fig1_learning_curves.png}
+\includegraphics[width=0.82\textwidth]{fig1_learning_curves.png}
 \caption{Training curves (dashed: rule base). DQN's training return degrades after $\sim$150k steps
 (moving-target instability), so for both deep agents we keep the weights that score best on held-out
 \emph{validation} sessions (dots), a seed range disjoint from training and test.}
 \label{fig:curves}\end{figure*}
 \begin{figure}[t]\centering
-\includegraphics[width=0.92\columnwidth]{../results/figures/fig4_q_vs_vi.png}
+\includegraphics[width=0.92\columnwidth]{fig4_q_vs_vi.png}
 \caption{Tabular Q-learning vs.\ value iteration's $Q^*$. On the learned, exactly-Markov MDP, Q-learning
 converges to $Q^*$ (99.1\% same action, mean error Rs\,14). On the real simulator agreement is 95.2\%
 (error Rs\,89): the gap is the hidden fraudster making the 432-state abstraction non-Markov.}
 \label{fig:qvi}\end{figure}
 \begin{figure}[t]\centering
-\includegraphics[width=0.85\columnwidth]{../results/figures/fig6_behaviour.png}
+\includegraphics[width=0.85\columnwidth]{fig6_behaviour.png}
 \caption{Learned behaviour (DQN) in taken-over sessions, aligned at the takeover step. The agent barely
 intervenes before takeover (dotted lines = genuine sessions), then sharply escalates to OTP and block.}
 \label{fig:beh}\end{figure}
