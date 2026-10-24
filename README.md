@@ -44,3 +44,56 @@ Tabular methods, VI/PI and linear Q are written from scratch with NumPy; DQN and
 ```bash
 pip install -r requirements.txt
 ```
+
+## Real data (IEEE-CIS)
+
+The default transaction source is synthetic, so the project runs straight after `git clone` with nothing to
+download. It can also replay real transactions from Kaggle's IEEE-CIS Fraud Detection data.
+
+**The dataset is not in this repository.** Kaggle's competition rules restrict redistributing it, and the
+raw CSVs are about 1.3 GB. Each person downloads it with their own Kaggle account (free).
+
+### Reproduce on real data
+
+1. One-time Kaggle setup:
+   * `pip install kaggle`
+   * kaggle.com → your profile → **Settings → API → Create New Token**, then
+     `mkdir -p ~/.kaggle && mv ~/Downloads/kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json`
+   * Accept the competition rules: <https://www.kaggle.com/c/ieee-fraud-detection/rules>
+2. Download the data, build the features and check them (one command, safe to re-run):
+   ```bash
+   bash scripts/get_ieee_data.sh            # optional: --inr-per-usd <rate>
+   ```
+3. Run every experiment on real transactions and draw the figures:
+   ```bash
+   python scripts/run_all.py --source ieee --out results_ieee   # about 35-45 min on 2 cores
+   python scripts/make_figures.py --results results_ieee
+   ```
+
+Prefer to do it by hand? `get_ieee_data.sh` runs exactly these steps:
+
+```bash
+kaggle competitions download -c ieee-fraud-detection -p data/ieee-fraud-detection
+unzip data/ieee-fraud-detection/ieee-fraud-detection.zip -d data/ieee-fraud-detection
+python -m frictionrl.data_ieee --raw data/ieee-fraud-detection --out data/ieee_features.npz
+python scripts/check_ieee.py
+```
+
+Dollar amounts are converted to rupees (default Rs 85 per USD, `--inr-per-usd` to change), so the costs in
+`config.py` apply unchanged. Real-data results are written to `results_ieee/`; the synthetic results in
+`results/` are not touched. The trained real-data agents, result tables and figures are committed in
+`results_ieee/`, so you can inspect them without downloading anything.
+See [`data/README.md`](data/README.md) for details. User and fraudster *reactions* (churn, OTP pass rates,
+retries) are always simulated: no public dataset records them.
+
+### Results on real transactions (5,000 held-out sessions, unseen customers)
+
+<!-- TODO: fill in from results_ieee/results_table.md after running the commands above -->
+
+| Agent | Net Rs / session ↑ | Fraud loss Rs / session ↓ | Churn % ↓ | OTPs / session |
+|---|---|---|---|---|
+| Rule base (propositional) | TODO | TODO | TODO | TODO |
+| Model-based value iteration | TODO | TODO | TODO | TODO |
+| Tabular Q-learning (ε-greedy) | TODO | TODO | TODO | TODO |
+| **DQN** | TODO | TODO | TODO | TODO |
+| **PPO** | TODO | TODO | TODO | TODO |
