@@ -1,5 +1,6 @@
 """Quick checks: python -m pytest -q"""
 import numpy as np
+import pytest
 from gymnasium.utils.env_checker import check_env
 
 from frictionrl.baselines import BASELINES
@@ -122,3 +123,67 @@ def test_ieee_source_from_fake_csv(tmp_path, monkeypatch):
             done, steps = term or trunc, steps + 1
         assert steps >= 1 and np.isfinite(info["stats"]["money"])
         assert env.user_mu in set(pools[f"user_mu_{split}"].tolist())
+
+
+# ---------------------------------------------------------------- exploratory red team (attacker.py)
+# Episode stats recorded with the ORIGINAL env.py (before the attacker hook existed): Rule-KB defender,
+# guaranteed takeover. The hook must not change a single number when attacker=None.
+EXPECTED_NO_ATTACKER = {
+    0: {'genuine_value': 169.38069862892695, 'fraud_loss': 0.0, 'otp': 1, 'false_blocks': 2, 'churned': 1,
+        'frozen': 0, 'fraud_txns': 1, 'fraud_stopped': 1, 'fraud_completed': 0, 'genuine_txns': 8, 'takeover': 1,
+        'money': -2932.619301371073},
+    1: {'genuine_value': 38.22362900104803, 'fraud_loss': 0.0, 'otp': 1, 'false_blocks': 2, 'churned': 1,
+        'frozen': 0, 'fraud_txns': 1, 'fraud_stopped': 1, 'fraud_completed': 0, 'genuine_txns': 4, 'takeover': 1,
+        'money': -3063.776370998952},
+    2: {'genuine_value': 260.0484446573248, 'fraud_loss': 2145.1937583039166, 'otp': 1, 'false_blocks': 0,
+        'churned': 0, 'frozen': 0, 'fraud_txns': 2, 'fraud_stopped': 0, 'fraud_completed': 2, 'genuine_txns': 18,
+        'takeover': 1, 'money': -1887.1453136465918},
+}
+
+
+def _play(env, defender, seed):
+    obs, _ = env.reset(seed=seed)
+    done = False
+    while not done:
+        obs, _, term, trunc, _ = env.step(defender(obs))
+        done = term or trunc
+    return env.stats
+
+
+def test_no_attacker_is_unchanged():
+    from frictionrl.baselines import rule_kb
+    env = FrictionEnv(SimConfig(p_takeover=1.0), attacker=None)
+    for seed, expected in EXPECTED_NO_ATTACKER.items():
+        assert _play(env, rule_kb, seed) == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+def test_fraudster_env_api():
+    from frictionrl.attacker import FraudsterEnv
+    from frictionrl.baselines import rule_kb
+    check_env(FraudsterEnv(rule_kb), skip_render_check=True)
+
+
+def test_attacker_that_leaves_steals_nothing():
+    from frictionrl.attacker import LEAVE
+    env = FrictionEnv(SimConfig(p_takeover=1.0), attacker=lambda fobs: LEAVE)
+    for seed in range(20):
+        stats = _play(env, lambda o: APPROVE, seed)
+        assert stats["fraud_received"] == 0 and stats["fraud_loss"] == 0 and stats["fraud_txns"] == 0
+        assert stats["attack_actions"] == [LEAVE]      # asked once, at the first fraudulent transaction
+
+
+def test_stealth_attacks_look_less_risky():
+    def new_device_rate(action):
+        env = FrictionEnv(SimConfig(p_takeover=1.0), attacker=lambda fobs: action)
+        seen = flagged = 0
+        for seed in range(150):
+            obs, _ = env.reset(seed=seed)
+            done = False
+            while not done:
+                if env.fraud_active:
+                    seen += 1
+                    flagged += env.txn.new_device
+                obs, _, term, trunc, _ = env.step(APPROVE)
+                done = term or trunc
+        return flagged / seen
+    assert new_device_rate(5) < new_device_rate(4) - 0.3     # large + stealth vs large, no stealth (0.10 vs 0.65)
