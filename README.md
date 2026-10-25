@@ -5,6 +5,7 @@ Team: Tanisha Ray (B24CM1061), Cherry Aggarwal (B24CM1016)
 
 **Live demo:** <https://codertanisha22.github.io/FrictionRL/> — the trained DQN agent runs in your browser on new
 sessions, next to the rule base, plus a "what would the agent do?" panel.
+**Report:** [`report/main.tex`](report/main.tex) (two-column LaTeX).
 
 Every UPI or card payment gets one of three decisions: **approve**, **step-up (OTP)**, or **block**.
 Static rules either let fraudsters drain accounts or bury genuine users in OTPs until they leave the app.
@@ -37,7 +38,20 @@ Why this needs RL and not a classifier:
 * Value iteration (226 sweeps) and policy iteration (5 improvement steps) give the identical policy.
 * Tabular Q-learning on the learned (exactly Markov) model matches value iteration on 99.1% of decisions; on the
   simulator 95.2%. The gap is the hidden fraudster.
+* Retraining PPO with a customer lifetime value of Rs 1,000 / 3,000 / 8,000 shifts the policy as intended:
+  0.98 / 0.49 / 0.33 OTPs per session and 2.2 / 0.8 / 0.3% churn. The more a customer is worth, the fewer OTPs.
 * Full table with false-block and fraud-completion rates: [`results/results_table.md`](results/results_table.md).
+
+These results use the **synthetic** transaction source (the default). Results on **real Kaggle transactions** are
+further down, under [Real data](#real-data-ieee-cis).
+
+### How we evaluate
+
+* Every agent is scored on **5,000 test sessions** whose random seeds are never used in training.
+* Learned agents are trained with **3 different random seeds**; tables show mean ± standard deviation.
+* DQN and PPO are checked every 10% of training on 1,000 separate **validation** sessions, and the best weights
+  are kept. Training, validation and test sessions use three disjoint seed ranges, so there is no test-set leakage.
+* On real data, customers are also split 80/20 into train and test pools, so test sessions use unseen customers.
 
 ![Net value per agent](results/figures/fig2_net_value.png)
 ![Fraud loss vs churn](results/figures/fig3_pareto.png) ![DQN behaviour around the takeover](results/figures/fig6_behaviour.png)
@@ -54,17 +68,6 @@ Why this needs RL and not a classifier:
 | **γ** | 0.99 |
 
 All constants live in [`frictionrl/config.py`](frictionrl/config.py).
-
-## Algorithms (one per lecture)
-
-| Method | Lecture | File |
-|---|---|---|
-| Baselines: always-approve / always-OTP / random / amount threshold / propositional rule base | Lec 16 | `baselines.py` |
-| Model-based learning (count T̂, R̂) + **value iteration** + **policy iteration** | Lec 27–28 | `planning.py` |
-| **Tabular Q-learning**: ε-greedy and exploration function f(u,n) = u + k/(n+1) | Lec 28–29 | `qlearning.py` |
-| **Approximate Q-learning** with linear features (interpretable weights) | Lec 29 | `qlearning.py` |
-| **DQN** (experience replay + target network) and **PPO** (actor–critic, GAE, clipped objective) | Lec 29 | `train_sb3.py` |
-
 Tabular methods, VI/PI and linear Q are written from scratch with NumPy; DQN and PPO use Stable-Baselines3.
 
 ## Installation
@@ -85,8 +88,17 @@ To keep the download small on a machine without a GPU, install the CPU build of 
 Check the installation:
 
 ```bash
-python -m pytest -q                    # 8 tests, about 5 seconds
+python -m pytest -q                    # 12 tests, about 5 seconds
 ```
+
+The tests check that the environment follows the Gymnasium API, that the 432-state discretisation stays in range,
+that always-approve lets every fraud through, that a second block freezes the account, that repeated OTPs drive
+users away, that value iteration and policy iteration agree, and that every baseline runs. One test builds a
+small **fake** file in the Kaggle IEEE-CIS format (2,000 rows), runs the real-data feature builder on it and plays a
+full episode, so the real-data code is tested without downloading the 1.3 GB dataset. Four tests cover the
+[red-team experiment](#exploratory-experiment-adaptive-adversary-red-team): without an attacker the environment gives
+exactly the same results as before, the fraudster's environment follows the Gymnasium API, a fraudster that leaves
+at once steals nothing, and stealth payments raise fewer risk flags.
 
 ## Run the trained agent
 
@@ -100,6 +112,11 @@ python scripts/demo_session.py --agent rule --seed 7    # same session, hand-wri
 
 Each line shows who really made the payment (hidden from the agent), the amount, the risk flags, the agent's
 decision and the rupee result.
+
+The [live demo](https://codertanisha22.github.io/FrictionRL/) ([`docs/index.html`](docs/index.html)) does the same in a
+browser with no installation: it contains the trained DQN's weights (`results/models/dqn_seed0_ltv3000`) and a
+JavaScript copy of the environment, checked against the Python version (Q-values match PyTorch to within 0.00002;
+over 50,000 sessions the two environments give the same results within noise). Its sessions are simulated.
 
 ## Reproduce the results
 
@@ -124,16 +141,33 @@ results; use `--out <folder>` to write somewhere else.
 | `results/linear_q_weights.json` | learned linear-Q weights per action |
 | `results/models/` | trained DQN and PPO agents |
 | `results/figures/` | all figures (`make_figures.py`) |
+| `results/behaviour_trace_*.csv` | every decision of the best deep agent, used for the behaviour figure (about 1.5 MB, not committed; `run_all.py` recreates it) |
 
 ## Real data (IEEE-CIS)
 
 The default transaction source is synthetic, so the project runs straight after `git clone` with nothing to
 download. It can also replay real transactions from Kaggle's IEEE-CIS Fraud Detection data.
 
-**The dataset is not in this repository.** Kaggle's competition rules restrict redistributing it, and the
-raw CSVs are about 1.3 GB. Each person downloads it with their own Kaggle account (free). The real-data
-results, trained agents and figures *are* committed in [`results_ieee/`](results_ieee/), so you can inspect them
-without downloading anything.
+**The dataset** is Kaggle's [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) data:
+**590,540 real card transactions, 3.5% of them fraud**. Rebuilt into **217,613 customers** (174,233 for training,
+43,380 held out for testing), it gives 471,879 training rows and 118,661 test rows.
+
+**The results in [`results_ieee/`](results_ieee/) were produced from this real dataset**, and they are committed:
+result tables, trained agents and figures. You can inspect them without downloading anything.
+
+**The raw dataset itself is not in this repository.** Kaggle's competition rules restrict redistributing it, and
+`train_transaction.csv` alone is 652 MB (GitHub's limit is 100 MB per file). After downloading, it sits in
+`data/ieee-fraud-detection/` with the built features in `data/ieee_features.npz`; both are git-ignored. Each person
+downloads it with their own Kaggle account (free).
+
+**What is real and what is simulated:**
+
+| | Source |
+|---|---|
+| Transaction content: amount vs. the customer's usual, new device, new payee, odd hour, burst | **real** IEEE-CIS rows |
+| Each customer's typical spending level | **real** (per-customer average) |
+| Session structure: up to 20 payments, when a takeover happens | simulated |
+| Reactions: churn after OTPs and blocks, OTP pass rates, fraudster retries | simulated; no public dataset records how people react to an OTP or a block |
 
 ### Reproduce on real data
 
@@ -193,11 +227,58 @@ User and fraudster *reactions* (churn, OTP pass rates, retries) are always simul
   from spotting the takeover itself.
 * DQN is unstable on real data (one seed at Rs 1,245, two below zero). The tabular methods and linear Q fall
   below the rule base: with weak signals, the 432-state abstraction loses the little information there is
-  (Q-learning agrees with value iteration on 99% of decisions on the learned model, but only 25–50% on the real-data
-  simulator).
+  (Q-learning agrees with value iteration on 99% of decisions on the learned model, but only about half, 51%, on the
+  real-data simulator at the end of training).
 * All hyperparameters were tuned on synthetic data and not re-tuned for real data.
 * Full table: [`results_ieee/results_table.md`](results_ieee/results_table.md); figures in
   [`results_ieee/figures/`](results_ieee/figures/).
+
+## Exploratory experiment: adaptive adversary (red team)
+
+Every defender above was trained and tested against one **scripted** fraudster, whose amounts and timing are drawn
+from fixed distributions. This experiment asks how much a fraudster that **learns** can take instead: an automated
+red team. For each frozen defender we train a PPO fraudster as a best response. **No defender is retrained or
+changed**, and there is no alternating self-play.
+
+**Pre-registered question:** how much does a learned fraudster increase fraud loss against each defender (Rule-KB,
+Amount-Threshold, DQN, PPO) compared with the scripted fraudster?
+**Primary metric:** exploitability = fraud loss Rs/session (learned) − fraud loss Rs/session (scripted), on sessions
+with a guaranteed takeover.
+
+**What the learned fraudster controls** ([`frictionrl/attacker.py`](frictionrl/attacker.py)): for each fraudulent
+payment it picks an amount (0.5×, 1× or 2.5× the user's usual), whether to use **stealth** (spoofed device and a payee
+the owner has paid before, so fewer risk flags, but it keeps only 60% of the money and the owner notices with a 10%
+chance per payment), or to cash out and leave. It sees its own progress and the defender's reactions, and is rewarded
+with the money it actually receives. The account-security rules stay: a failed OTP locks it out with probability 0.7,
+it beats an OTP 15% of the time, and a second block freezes the account. The defender's loss is unchanged (amount +
+Rs 200 chargeback).
+
+```bash
+python scripts/red_team.py --quick     # smoke test: 20k training steps, 500 test sessions (about 2 min)
+python scripts/red_team.py             # full run: 150k steps, 3,000 test sessions, attacker seeds 0 and 1
+python scripts/red_team.py --attacker-seeds 0 1 2 --workers 8    # more seeds, in parallel
+```
+
+Outputs go to `results_adversary/`: `exploit.csv`, `attack_mix.csv`, `logs.json`, `results_table.md`, the trained
+fraudsters in `models/`, and three figures (`fig_adv_exploit.png`, `fig_adv_attack_mix.png`, `fig_adv_learning.png`).
+
+Each defender faces three attackers on the same test sessions: the **scripted** fraudster, a **random** attacker
+(uniform over the 7 actions) and the **learned** one. The learned and random attackers never cash out by chance,
+unlike the scripted fraudster, so the table also reports the **learning gain** (learned − random): the part of the
+extra loss that comes from learning rather than from staying longer.
+
+### Results (TODO: fill in from `results_adversary/results_table.md` after the full run)
+
+| Defender | Scripted Rs | Random Rs | Learned Rs | Exploitability Rs | Learning gain Rs | Net Rs/session at p = 0.15: scripted → learned |
+|---|---|---|---|---|---|---|
+| Rule-KB | TODO | TODO | TODO | TODO | TODO | TODO |
+| Amount-Threshold | TODO | TODO | TODO | TODO | TODO | TODO |
+| DQN | TODO | TODO | TODO | TODO | TODO | TODO |
+| PPO | TODO | TODO | TODO | TODO | TODO | TODO |
+
+Limits: the attack model is ours, not calibrated on data, and in it staying never costs the fraudster anything, so a
+learned fraudster has no reason to cash out early. Treat this as a stress test of the defenders, not an estimate of
+real-world losses.
 
 ## Repository layout
 
@@ -212,15 +293,18 @@ frictionrl/
   train_sb3.py     DQN, PPO
   evaluate.py      held-out evaluation + metrics
   data_ieee.py     IEEE-CIS feature builder
+  attacker.py      red team: attack actions, AttackConfig, FraudsterEnv
 scripts/
   run_all.py       every experiment (--quick, --source, --out, --workers)
   make_figures.py  figures + tables
   demo_session.py  step-by-step demo in the terminal
   check_ieee.py    real-data check + synthetic-vs-real comparison figure
   get_ieee_data.sh download + build the real-data features
-tests/test_env.py  8 tests
+  red_team.py      train learned fraudsters against frozen defenders and compare
+tests/test_env.py  12 tests
 results/           synthetic results: tables, trained models, figures
 results_ieee/      real-data results: tables, trained models, figures
+results_adversary/ red-team results (after running red_team.py)
 docs/index.html    live demo page (GitHub Pages)
 report/main.tex    two-column LaTeX report
 data/README.md     how to get the real data

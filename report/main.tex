@@ -10,7 +10,7 @@
 \setlist{nosep,leftmargin=*}
 \setlength{\parskip}{2pt}
 \setlength{\parindent}{0pt}
-\graphicspath{{../results/figures/}{figures/}}
+\graphicspath{{../results/figures/}{../results_adversary/figures/}{figures/}}
 
 \title{\vspace{-0.6in}\textbf{FrictionRL: Learning When to Ask for an OTP}\\[2pt]
 \large Reinforcement Learning for Safer and Smoother UPI Payments}
@@ -166,9 +166,48 @@ attractive (OTP fatigue), and a second block is strongly avoided because it free
 it asks for fewer OTPs (0.98, 0.49, 0.33 per session) and churn drops (2.2, 0.8, 0.3\%). In other words, the
 more a customer is worth, the more carefully the agent avoids bothering them.
 
+\textbf{Real transactions (IEEE-CIS).} Replaying 590{,}540 real card transactions (customers rebuilt
+with the \texttt{card1+addr1+D1} uid, amounts at Rs\,85/USD) makes the task much harder: per-transaction
+signals are far weaker than in our generator (new device: 4.5\% genuine vs.\ 12\% fraud, against 8\% vs.\ 65\%
+synthetic). PPO still gives the best net value (Table~\ref{tab:ieee}), but mainly by calibrating OTP friction
+rather than detecting takeovers---83\% of fraudulent transactions still complete. DQN is unstable across seeds,
+and the 432-state tabular methods collapse because their hand-set discretisation thresholds do not transfer;
+hyperparameters were not re-tuned. Real data confirms PPO over static rules, and shows that richer
+transaction signals, not the RL algorithm, are now the bottleneck.
+
+\begin{table}[h]\centering\footnotesize\setlength{\tabcolsep}{4pt}
+\caption{IEEE-CIS replay (5{,}000 held-out sessions; 3 seeds).}\label{tab:ieee}
+\begin{tabular}{lrrr}\toprule
+Agent & Net Rs & Fraud loss Rs & Churn \%\\\midrule
+Amount threshold & 161 & 5462 & 3.1\\
+Rule base & $-198$ & 6049 & 0.7\\
+DQN & $88{\scriptstyle\pm1008}$ & 4918 & 12.5\\
+PPO & $\mathbf{931}{\scriptstyle\pm540}$ & 4395 & 8.5\\\bottomrule
+\end{tabular}\end{table}
+
+\subsection{Exploratory: adaptive adversary}
+All defenders were trained against one scripted fraudster. As an automated red-team stress test, following
+\cite{mead,fraudrla}, we train a PPO fraudster as a best response to each \emph{frozen} defender (none is
+retrained). Per fraudulent payment it chooses the amount ($0.5{\times}$, $1{\times}$ or $2.5{\times}$ the user's
+usual), stealth (spoofed device and known payee: fewer risk flags, but it keeps only 60\% and the owner notices
+w.p.\ 0.1) or cashing out. We measure \emph{exploitability}, the extra fraud loss per takeover session over the
+scripted fraudster, on the same 3{,}000 test sessions (Fig.~\ref{fig:adv}). Because learned and random attackers
+never cash out by chance, we also report the gain over a random attacker. Every defender is exploitable: the
+learned fraudster adds Rs\,8{,}902 per session against Rule-KB, Rs\,14{,}937 against the amount threshold,
+Rs\,16{,}805 against DQN and Rs\,16{,}520 against PPO (Rs\,7{,}947--14{,}499 more than a random attacker). The RL
+defenders are the \emph{most} exploitable: they are overfitted to the scripted fraudster, and the learned one
+beats them with large stealth payments, while it stays at $1{\times}$ amounts to slip under the threshold rule.
+Adversarial training is future work.
+
+\begin{figure}[t]\centering
+\includegraphics[width=0.82\columnwidth]{fig_adv_exploit.png}
+\caption{Fraud loss per takeover session against each frozen defender: scripted, random and learned (PPO)
+fraudster (3{,}000 test sessions; both attacker seeds learned the same strategy).}\label{fig:adv}
+\end{figure}
+
 \textbf{Limitations and future work.} User and fraudster reactions are simulated, since no public data records
-them. Next, we would like to train the fraudster as a second learning agent and use a recurrent policy to
-handle the hidden state better.
+them, and the attack model above is ours, not calibrated on data. Next, we would like to train defender and
+fraudster in alternation (adversarial training) and use a recurrent policy to handle the hidden state better.
 
 \small
 \begin{thebibliography}{9}\setlength{\itemsep}{0pt}
@@ -177,5 +216,8 @@ handle the hidden state better.
 \bibitem{ppo} J.~Schulman et al. Proximal policy optimization algorithms. arXiv:1707.06347, 2017.
 \bibitem{sb3} A.~Raffin et al. Stable-Baselines3. \emph{JMLR}, 2021.
 \bibitem{ieee} IEEE-CIS Fraud Detection, Kaggle, 2019.
+\bibitem{mead} Mead et al. TODO: full reference (authors, title, venue, year).
+\bibitem{fraudrla} D.~Lunghi et al. FRAUD-RLA: a new reinforcement learning adversarial attack against
+credit card fraud detection. arXiv:2502.02290, 2025.
 \end{thebibliography}
 \end{document}
