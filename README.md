@@ -60,19 +60,6 @@ There is deliberately no bonus for catching fraud, so the agent cannot gain by b
 | fraudster cashes out after each payment | 0.30 |
 | second block | freezes the account (episode ends) |
 
-## Algorithms
-
-| Method | Lecture | File |
-|---|---|---|
-| Baselines: always approve / always OTP / random / amount threshold / propositional rule base | Lec 16 | `frictionrl/baselines.py` |
-| Model-based learning (count T̂, R̂) + value iteration + policy iteration | Lec 27–28 | `frictionrl/planning.py` |
-| Tabular Q-learning, with ε-greedy or exploration function f(u, n) = u + k/(n+1) | Lec 28–29 | `frictionrl/qlearning.py` |
-| Approximate Q-learning with linear features | Lec 29 | `frictionrl/qlearning.py` |
-| DQN (replay buffer + target network) and PPO (actor–critic, clipped objective, GAE) | Lec 29 | `frictionrl/train_sb3.py` |
-
-Value/policy iteration, tabular Q-learning and linear Q are written from scratch in NumPy. DQN and PPO use
-Stable-Baselines3 (500k steps each, keeping the weights that score best on separate validation sessions).
-
 ## Results
 
 Every agent is scored on **5,000 test sessions** whose seeds are never used in training or validation. Learned
