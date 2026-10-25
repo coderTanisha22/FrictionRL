@@ -77,7 +77,6 @@ def test_baselines_run():
 
 def test_ieee_source_from_fake_csv(tmp_path, monkeypatch):
     """Build a tiny fake IEEE-CIS dataset, run the feature builder, and play one episode on it."""
-    import pytest
     from frictionrl import data_ieee
 
     rng = np.random.default_rng(0)
@@ -125,8 +124,7 @@ def test_ieee_source_from_fake_csv(tmp_path, monkeypatch):
         assert env.user_mu in set(pools[f"user_mu_{split}"].tolist())
 
 
-# ---------------------------------------------------------------- exploratory red team (attacker.py)
-# Episode stats recorded with the ORIGINAL env.py (before the attacker hook existed): Rule-KB defender,
+# Red team (attacker.py). Episode stats recorded with the ORIGINAL env.py (before the attacker hook existed): Rule-KB defender,
 # guaranteed takeover. The hook must not change a single number when attacker=None.
 EXPECTED_NO_ATTACKER = {
     0: {'genuine_value': 169.38069862892695, 'fraud_loss': 0.0, 'otp': 1, 'false_blocks': 2, 'churned': 1,

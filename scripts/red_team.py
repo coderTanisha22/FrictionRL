@@ -1,15 +1,13 @@
-"""Exploratory: an automated red team. Train a learned fraudster (PPO) as a best response against each FROZEN
-defender, then compare it with the scripted fraudster and a random attacker on the same test sessions.
+"""Red team: train a PPO fraudster against each FROZEN defender and compare it with the scripted fraudster
+and a random attacker on the same test sessions (all with a guaranteed takeover).
 
-Pre-registered question: how much does a learned fraudster increase fraud loss against each defender
-(Rule-KB, Amount-Threshold, DQN, PPO) compared with the scripted fraudster?
-Primary metric: exploitability = fraud loss Rs/session (learned) - fraud loss Rs/session (scripted),
-measured on sessions with a guaranteed takeover.
+Question: how much more fraud loss does a learned fraudster cause than the scripted one?
+Exploitability = fraud loss Rs/session (learned) - fraud loss Rs/session (scripted).
 
-    python scripts/red_team.py --quick                      # smoke test (20k steps, 500 eval sessions)
-    python scripts/red_team.py                              # full run (150k steps, 3,000 eval sessions)
+    python scripts/red_team.py --quick     # smoke test (20k steps, 500 eval sessions)
+    python scripts/red_team.py             # full run (150k steps, 3,000 eval sessions)
 
-No defender is retrained or changed. Nothing in results/ is written.
+No defender is retrained. Nothing in results/ is written.
 """
 from __future__ import annotations
 
@@ -27,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from frictionrl.attacker import LEAVE, N_ATTACK_ACTIONS, AttackConfig  # noqa: E402
 from frictionrl.config import SimConfig                                 # noqa: E402
-from frictionrl.evaluate import TEST_SEED_OFFSET, summarize             # noqa: E402
+from frictionrl.evaluate import run_policy, summarize                   # noqa: E402
 
 DEFENDER_LABELS = {"rule": "Rule-KB", "threshold": "Amount-Threshold", "dqn": "DQN", "ppo": "PPO"}
 ATTACKERS = ["scripted", "random", "learned"]
@@ -51,24 +49,14 @@ def make_defender(name: str, model_seed: int):
 
 
 def evaluate_attack(defender, attacker, n_eps: int, p_takeover: float) -> dict:
-    """Run n_eps test sessions (same seeds for every attacker). attacker=None -> the scripted fraudster."""
-    from frictionrl.env import FrictionEnv
+    """Play n_eps test sessions (same seeds for every attacker). attacker=None -> the scripted fraudster."""
     cfg = SimConfig(p_takeover=p_takeover)
-    env = FrictionEnv(cfg, mode="continuous", split="test", attacker=attacker)
-    rows, actions = [], []
-    for ep in range(n_eps):
-        obs, _ = env.reset(seed=TEST_SEED_OFFSET + ep)
-        done = False
-        while not done:
-            obs, _, term, trunc, _ = env.step(int(defender(obs)))
-            done = term or trunc
-        s = dict(env.stats)
-        if attacker is None:   # the scripted fraudster keeps everything it steals
-            s["fraud_received"] = s["fraud_loss"] - cfg.chargeback_fee * s["fraud_completed"]
-            s["attack_actions"] = []
-        actions.append(s.pop("attack_actions"))
-        rows.append(s)
-    df = pd.DataFrame(rows)
+    df = run_policy(defender, n_eps, cfg=cfg, attacker=attacker)
+    if attacker is None:   # the scripted fraudster keeps everything it steals
+        df["fraud_received"] = df["fraud_loss"] - cfg.chargeback_fee * df["fraud_completed"]
+        actions = [[] for _ in range(len(df))]
+    else:
+        actions = df.pop("attack_actions").tolist()
     res = summarize(df)
     res["fraudster_received_rs_per_session"] = df["fraud_received"].mean()
     res.update(attack_mix(actions))
@@ -150,7 +138,7 @@ def main():
     print(f"red team: defenders={defenders} attacker seeds={a.attacker_seeds} steps={a.steps:,} "
           f"eval sessions={a.eval_eps:,} -> {a.out}/", flush=True)
 
-    rows, mixes, curves, warnings = [], [], {}, []
+    rows, curves, warnings = [], {}, []
     with ProcessPoolExecutor(a.workers) as ex:
         base = list(ex.map(baseline_job, [(d, a.model_seed, a.eval_eps) for d in defenders]))
         learned = list(ex.map(learned_job, [(d, a.model_seed, s, a.steps, a.eval_eps, a.out)
@@ -170,7 +158,7 @@ def main():
     df[["defender", "attacker", "attacker_seed"] + mix_cols].to_csv(f"{a.out}/attack_mix.csv", index=False)
     df.drop(columns=mix_cols).to_csv(f"{a.out}/exploit.csv", index=False)
 
-    # ---- per defender: mean/std over attacker seeds, exploitability, sanity check
+    # per defender: mean/std over attacker seeds, exploitability, and a sanity check
     summary = []
     for name in defenders:
         lab = DEFENDER_LABELS[name]
@@ -241,10 +229,9 @@ def make_figures(df, summ, curves, defenders, out):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    # same palette and style as make_figures.py; one colour per attacker type in every figure
+    # one colour per attacker type in every figure; defenders get different colours
     INK2, GRID = "#52514e", "#e6e5e0"
     ATT_COL = {"scripted": "#8a8985", "random": "#eda100", "learned": "#e34948"}
-    # defenders get their own colours, never reused for attacker types
     DEF_COL = {"Rule-KB": "#6250d6", "Amount-Threshold": "#e87ba4", "DQN": "#2a78d6", "PPO": "#1baf7a"}
     SHORT = {"Rule-KB": "Rule-KB", "Amount-Threshold": "Thresh.", "DQN": "DQN", "PPO": "PPO"}
     plt.rcParams.update({

@@ -1,4 +1,4 @@
-"""Build every figure + results table from results/ (run scripts/run_all.py first).
+"""Draw every figure and write results_table.md from a results folder (run scripts/run_all.py first).
 
     python scripts/make_figures.py [--results results]
 """
@@ -7,7 +7,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 
 import matplotlib
 
@@ -16,10 +15,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from frictionrl.env import N_DISCRETE_STATES, describe_state  # noqa: E402
-
-# palette (validated categorical order) + neutrals
+# colour palette + neutral greys
 C = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 GRAY, INK, INK2, GRID = "#8a8985", "#0b0b0b", "#52514e", "#e6e5e0"
 plt.rcParams.update({
@@ -49,9 +45,8 @@ def main():
     sweep = pd.read_csv(f"{R}/threshold_sweep.csv")
     agg = runs.drop(columns="seed").groupby(["agent", "family"], sort=False).agg(["mean", "std"])
     base_rule = agg.loc[("Rule-KB", "baseline"), ("net_rs_per_session", "mean")]
-    base_thr = agg.loc[("Amount-Threshold", "baseline"), ("net_rs_per_session", "mean")]
 
-    # ------------------------------------------------ Fig 1: learning curves (rupees per session)
+    # Fig 1: learning curves (rupees per session)
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.1), sharey=True)
     ally = []                                   # every plotted value, to set the y-range from the data
     ax = axes[0]
@@ -98,7 +93,7 @@ def main():
     fig.savefig(f"{F}/fig1_learning_curves.png")
     plt.close(fig)
 
-    # ------------------------------------------------ Fig 2: net value per session, all agents
+    # Fig 2: net value per session, all agents
     d = agg["net_rs_per_session"].reset_index().sort_values("mean")
     fig, ax = plt.subplots(figsize=(3.5, 3.0))
     cols = [GRAY if f == "baseline" else C[0] for f in d.family]
@@ -115,7 +110,7 @@ def main():
     fig.savefig(f"{F}/fig2_net_value.png")
     plt.close(fig)
 
-    # ------------------------------------------------ Fig 3: Pareto - fraud loss vs churn
+    # Fig 3: fraud loss vs churn (Pareto)
     fig, ax = plt.subplots(figsize=(4.8, 2.9))
     ax.plot(sweep.fraud_loss_rs_per_session, sweep.churn_pct, "-o", color=GRAY, ms=2.5, lw=1.2, zorder=1,
             label="Amount threshold (swept)")
@@ -141,7 +136,7 @@ def main():
     fig.savefig(f"{F}/fig3_pareto.png")
     plt.close(fig)
 
-    # ------------------------------------------------ Fig 4: Q-learning vs value iteration
+    # Fig 4: Q-learning vs value iteration
     fig, axes = plt.subplots(2, 1, figsize=(3.5, 3.3), sharex=True)
     for i, (key, lab) in enumerate([("markov_check", "on learned MDP (exactly Markov)"),
                                     ("egreedy_0", "on real simulator (hidden fraudster)")]):
@@ -159,7 +154,7 @@ def main():
     fig.savefig(f"{F}/fig4_q_vs_vi.png")
     plt.close(fig)
 
-    # ------------------------------------------------ Fig 5: learned policy maps (VI vs Q-learning)
+    # Fig 5: learned policy maps (VI vs Q-learning)
     pl = np.load(f"{R}/planning.npz")
     Qe = np.load(f"{R}/Q_explfn.npy")
     Nvisit = pl["N"][:-1].sum(1)
@@ -173,7 +168,7 @@ def main():
                            (axes[1], Qe.argmax(1), "Tabular Q-learning (expl. fn)")]:
         for r_i, (n, f, p) in enumerate(rows_spec):
             for c_i, (a, fl) in enumerate(cols_spec):
-                # session not risky, not blocked
+                # same order as env.discretize; session not risky, not blocked
                 idx = ((((((a * 3 + fl) * 3 + n) * 2 + f) * 2 + p) * 2 + 0) * 2 + 0)
                 if Nvisit[idx] < 30:
                     ax.add_patch(plt.Rectangle((c_i, r_i), 1, 1, color="#f3f2ee"))
@@ -196,7 +191,7 @@ def main():
     fig.savefig(f"{F}/fig5_policy_maps.png")
     plt.close(fig)
 
-    # ------------------------------------------------ Fig 6: behaviour around the takeover
+    # Fig 6: behaviour around the takeover
     best = logs["best_deep"]
     tr = pd.read_csv(f"{R}/behaviour_trace_{best}.csv")
     tk = tr[tr.takeover == 1].dropna(subset=["rel"])
@@ -218,7 +213,7 @@ def main():
     fig.savefig(f"{F}/fig6_behaviour.png")
     plt.close(fig)
 
-    # ------------------------------------------------ results table (markdown)
+    # results table (markdown)
     cols = ["net_rs_per_session", "fraud_loss_rs_per_session", "fraud_txn_completed_pct", "churn_pct",
             "false_block_pct", "otp_per_session"]
     hdr = ["Agent", "Net Rs/session", "Fraud loss Rs/session", "Fraud txns completed %", "Churn %",

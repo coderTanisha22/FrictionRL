@@ -1,25 +1,16 @@
-"""Build real transaction feature pools from Kaggle's IEEE-CIS Fraud Detection data.
+"""Build real feature pools from Kaggle's IEEE-CIS Fraud Detection data (see data/README.md).
 
-Download (needs a Kaggle account, accept the competition rules):
-    kaggle competitions download -c ieee-fraud-detection -p data/ieee-fraud-detection
-    unzip data/ieee-fraud-detection/ieee-fraud-detection.zip -d data/ieee-fraud-detection
-Build:
     python -m frictionrl.data_ieee --raw data/ieee-fraud-detection --out data/ieee_features.npz
-Then train/evaluate with source="ieee" (see README).
 
-Customers are reconstructed with the well-known Kaggle "uid" trick:
-    uid = card1 + addr1 + (transaction day - D1)          (D1 = days since card was first used)
-For each transaction we compute the same 5 per-transaction features the simulator uses:
+Customers are rebuilt with the Kaggle "uid" trick: uid = card1 + addr1 + (transaction day - D1).
+Per transaction we compute the simulator's 5 features:
     log_amount_ratio : log(amount) - mean log(amount) of this customer's PREVIOUS transactions
     new_device       : DeviceInfo differs from the customer's first device (missing -> 0)
     new_payee        : recipient e-mail domain not seen before for this customer (missing -> 0)
     odd_hour         : transaction hour in [0, 5]
     burst            : < 10 minutes since the customer's previous transaction
-Customers are split 80/20 into train/test pools by uid, so test sessions use unseen customers.
-Each pool also stores every customer's mean log(TransactionAmt) as user_mu_train / user_mu_test,
-so the simulator can sample a real "typical amount" for each session's user.
-IEEE-CIS amounts are in US dollars; user_mu is converted to rupees (+ log INR_PER_USD) so amounts
-match the rupee costs in config.py. log_amount_ratio is a ratio, so it needs no conversion.
+Customers are split 80/20 into train/test by uid, so test sessions use unseen customers. Each split also
+stores every customer's mean log amount (user_mu_*), converted from dollars to rupees with INR_PER_USD.
 """
 from __future__ import annotations
 

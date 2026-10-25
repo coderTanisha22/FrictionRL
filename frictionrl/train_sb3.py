@@ -1,5 +1,4 @@
-"""Lec 29: DQN (experience replay + target network) and PPO (actor-critic, clipped objective)
-via Stable-Baselines3, on the continuous FrictionEnv."""
+"""DQN (experience replay + target network) and PPO (actor-critic, clipped objective) with Stable-Baselines3 (Lec 29)."""
 from __future__ import annotations
 
 import copy
@@ -40,9 +39,8 @@ class SB3Policy:
 
 
 class KeepBestOnValidation(BaseCallback):
-    """Every `every` steps, score the greedy policy on held-out VALIDATION sessions (a seed range
-    disjoint from both training and test) and keep a copy of the best weights. Standard model
-    selection: deep Q-learning in particular can degrade late in training."""
+    """Every `every` steps, score the greedy policy on validation sessions (seeds used neither for training
+    nor for testing) and keep the best weights. Deep Q-learning in particular can get worse late in training."""
 
     def __init__(self, cfg, every=50_000, n_sessions=1_000, source=None):
         super().__init__()
@@ -52,7 +50,7 @@ class KeepBestOnValidation(BaseCallback):
     def _on_step(self):
         if self.num_timesteps % self.every == 0:
             from .evaluate import VAL_SEED_OFFSET, run_policy
-            # validation sessions: own seed range, and training customers only (never the test pool)
+            # validation uses training customers only (real data), never the test pool
             df = run_policy(SB3Policy(self.model), self.n, cfg=self.cfg, source=self.source,
                             seed_offset=VAL_SEED_OFFSET, split="train")
             score = float(df["money"].mean())
@@ -64,7 +62,8 @@ class KeepBestOnValidation(BaseCallback):
 
 
 def train(algo: str, timesteps: int = 300_000, seed: int = 0, cfg: SimConfig | None = None,
-          source: str | None = None, keep_best: bool = True):
+          source: str | None = None):
+    """Train DQN or PPO, then load the best validation weights. Returns the model and its learning curve."""
     env = Monitor(FrictionEnv(cfg, mode="continuous", source=source))
     env.reset(seed=seed)
     if algo == "dqn":
@@ -73,15 +72,10 @@ def train(algo: str, timesteps: int = 300_000, seed: int = 0, cfg: SimConfig | N
         model = PPO("MlpPolicy", env, seed=seed, verbose=0, **PPO_KW)
     else:
         raise ValueError(algo)
-    cb = (KeepBestOnValidation(cfg or SimConfig(), every=max(timesteps // 10, 1), source=source)
-          if keep_best else None)
+    cb = KeepBestOnValidation(cfg or SimConfig(), every=max(timesteps // 10, 1), source=source)
     model.learn(total_timesteps=timesteps, callback=cb)
-    if cb is not None and cb.best_params is not None:
+    if cb.best_params is not None:
         model.set_parameters(cb.best_params, exact_match=False)
-    rets = np.array(env.get_episode_rewards())
-    lens = np.array(env.get_episode_lengths())
-    curve = dict(steps=np.cumsum(lens), returns=rets)
-    if cb is not None:
-        curve["val_steps"] = np.array([h[0] for h in cb.history])
-        curve["val_money"] = np.array([h[1] for h in cb.history])
+    curve = dict(steps=np.cumsum(env.get_episode_lengths()), returns=np.array(env.get_episode_rewards()),
+                 val_steps=np.array([h[0] for h in cb.history]), val_money=np.array([h[1] for h in cb.history]))
     return model, curve

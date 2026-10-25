@@ -1,9 +1,7 @@
-"""Non-learning baselines. Each policy maps a continuous observation vector -> action.
+"""Non-learning baselines. Each maps a continuous observation to an action.
 
-Observation index reminder (see config.OBS_NAMES):
- 0 log_amount_ratio, 1 new_device, 2 new_payee, 3 odd_hour, 4 burst,
- 5 risk_rate_session, 6 progress, 7 n_otp_issued/3, 8 otp_failed_seen,
- 9 otp_passed_seen, 10 n_blocks/2
+Observation indices (config.OBS_NAMES): 0 amount ratio, 1 new device, 2 new payee, 3 odd hour, 4 burst,
+5 session risk rate, 6 progress, 7 #OTPs/3, 8 OTP failed, 9 OTP passed, 10 #blocks/2.
 """
 import numpy as np
 
@@ -27,8 +25,7 @@ class RandomPolicy:
 
 
 class AmountThreshold:
-    """What many systems do today: step up any transaction above an amount threshold,
-    block after a failed OTP. tau is in log-ratio units (tau=1.0 -> 2.7x the user's usual amount)."""
+    """OTP above an amount threshold, block after a failed OTP. tau is a log ratio: tau=1.0 -> 2.7x usual."""
 
     def __init__(self, tau: float = 1.0):
         self.tau = tau
@@ -40,12 +37,12 @@ class AmountThreshold:
 
 
 def rule_kb(obs):
-    """Hand-written propositional rule base (Lec 16 style: IF conditions THEN action).
-      R1: OtpFailed                                   => BLOCK
-      R2: OtpPassed  and  not VeryHighAmount          => APPROVE   (user already verified)
-      R3: HighAmount and (NewDevice or NewPayee)      => OTP
-      R4: NewDevice and NewPayee and Burst            => OTP
-      R5: otherwise                                   => APPROVE
+    """Hand-written propositional rule base (Lec 16): IF conditions THEN action.
+      R1: OtpFailed                              => BLOCK
+      R2: OtpPassed and not VeryHighAmount       => APPROVE   (user already verified)
+      R3: HighAmount and (NewDevice or NewPayee) => OTP
+      R4: NewDevice and NewPayee and Burst       => OTP
+      R5: otherwise                              => APPROVE
     """
     lr, nd, npy, burst = obs[0], obs[1] > 0.5, obs[2] > 0.5, obs[4] > 0.5
     if obs[8] > 0.5:

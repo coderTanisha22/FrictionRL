@@ -1,19 +1,13 @@
 """FrictionEnv: one user payment session as an MDP (Gymnasium API).
 
 Episode  = one session of up to H transactions.
-Hidden   = whether the account has been taken over by a fraudster (and when).
+Hidden   = whether (and when) a fraudster has taken over the account.
 Actions  = 0 APPROVE, 1 OTP (step-up), 2 BLOCK.
-Reward   = rupees / reward_scale:
-             + fee * amount            completed genuine txn
-             - (amount + chargeback)   completed fraud txn
-             - otp_cost                every OTP
-             - false_block_cost        blocking a genuine txn
-             - LTV                     genuine user churns (absorbing terminal state)
-             - freeze_genuine_cost     freezing a genuine user's account
-Terminal = churn, account frozen (2nd block), or horizon reached (truncation).
+Reward   = money / reward_scale: + fee on genuine payments, - (amount + chargeback) on fraud,
+           - OTP cost, - false-block cost, - LTV if the user leaves, - freeze cost for a genuine account.
+Terminal = user leaves (churn) or account frozen (2nd block); truncated after H transactions.
 
-mode="continuous" -> Box observation (11 features), for linear-Q / DQN / PPO.
-mode="discrete"   -> Discrete(432) observation, for value iteration / tabular Q-learning.
+mode="continuous": 11 features (linear Q, DQN, PPO). mode="discrete": 432 states (value iteration, tabular Q).
 """
 from __future__ import annotations
 
@@ -31,9 +25,7 @@ N_DISCRETE_STATES = 3 * 3 * 3 * 2 * 2 * 2 * 2  # = 432
 
 
 def discretize(obs: np.ndarray) -> int:
-    """Map the continuous observation to one of 432 discrete states:
-    amount bucket(3) x risk flags(3) x #OTPs(3) x otp_failed(2) x otp_passed(2)
-    x session_risky(2) x blocked(2)."""
+    """Continuous observation -> one of 432 states: amount(3) x flags(3) x #OTPs(3) x failed x passed x risky x blocked."""
     lr = obs[0]
     amt = 0 if lr < 0.5 else (1 if lr < 1.5 else 2)
     flags = int(round(obs[1] + obs[2] + obs[3]))
@@ -54,6 +46,7 @@ def discretize(obs: np.ndarray) -> int:
 
 
 def describe_state(idx: int) -> dict:
+    """Inverse of discretize, for reading a state number."""
     blocked = idx % 2; idx //= 2
     risky = idx % 2; idx //= 2
     passed = idx % 2; idx //= 2
@@ -69,33 +62,30 @@ class FrictionEnv(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, cfg: SimConfig | None = None, mode: str = "continuous",
-                 source: str | None = None, split: str = "train", attacker=None, attack_cfg=None):
+                 source: str | None = None, split: str = "train", attacker=None):
         super().__init__()
-        # transaction source: "synthetic" (default) or "ieee"; can be set with env var FRICTIONRL_SOURCE
-        source = source or os.environ.get("FRICTIONRL_SOURCE", "synthetic")
+        source = source or os.environ.get("FRICTIONRL_SOURCE", "synthetic")   # "synthetic" or "ieee"
         self.cfg = cfg or SimConfig()
         self.mode = mode
         self.src = make_source(source, self.cfg, split)
-        # Exploratory red team (attacker.py): attacker is a callable fraud_obs -> action in 0..6 that replaces
-        # the scripted fraudster's choices. attacker=None keeps the original environment exactly.
+        # Red team (attacker.py): a callable fraud_obs -> action 0..6 replaces the scripted fraudster's choices.
+        # attacker=None keeps the original environment exactly.
         self.attacker = attacker
-        self.acfg = attack_cfg or (AttackConfig() if attacker is not None else None)
+        self.acfg = AttackConfig() if attacker is not None else None
         self.action_space = spaces.Discrete(3)
         if mode == "continuous":
             self.observation_space = spaces.Box(-3.0, 4.0, shape=(OBS_DIM,), dtype=np.float32)
         else:
             self.observation_space = spaces.Discrete(N_DISCRETE_STATES)
 
-    # ------------------------------------------------------------------ helpers
     def apply_attack(self, a):
-        """The fraudster's decision for the pending transaction (0..5 = amount/stealth, 6 = cash out and leave).
-        Called right away for a callable attacker, or later by attacker.FraudsterEnv (attacker=EXTERNAL)."""
+        """The fraudster's choice for the pending transaction: 0..5 = amount/stealth, 6 = cash out and leave."""
         assert self.awaiting_attack, "no fraudulent transaction is waiting for a decision"
         self.awaiting_attack = False
         a = int(a)
         self.stats["attack_actions"].append(a)
         if a == LEAVE:
-            self._fraud_gives_up()      # cash out and leave: the owner makes this payment
+            self._fraud_gives_up()      # the owner makes this payment instead
             txn = self.src.genuine(self.np_random, self.user_mu)
         else:
             self.attack_action = a
@@ -110,6 +100,7 @@ class FrictionEnv(gym.Env):
 
     def _new_txn(self):
         if self.fraud_active and self.attacker is not None:
+            # learned fraudster: ask it now, or wait for FraudsterEnv to call apply_attack (attacker=EXTERNAL)
             self.awaiting_attack = True
             self.txn = None
             if self.attacker != EXTERNAL:
@@ -130,7 +121,7 @@ class FrictionEnv(gym.Env):
 
     def _obs_vec(self) -> np.ndarray:
         t = self.txn
-        v = np.array([
+        return np.array([
             np.clip(t.log_amount_ratio, -3, 4),
             t.new_device, t.new_payee, t.odd_hour, t.burst,
             self.n_risky / max(self.n_seen, 1),
@@ -140,14 +131,14 @@ class FrictionEnv(gym.Env):
             float(self.otp_passed),
             min(self.n_blocks, 2) / 2.0,
         ], dtype=np.float32)
-        return v
 
     def _obs(self):
         v = self._obs_vec()
         return v if self.mode == "continuous" else discretize(v)
 
     def fraud_obs(self) -> np.ndarray:
-        """What the fraudster sees (attacker.FRAUD_OBS_NAMES): its own progress and the defender's reactions."""
+        """What the fraudster sees: progress, #fraud txns /10, money received /10,000,
+        defender's last action (one-hot), OTP failed, #blocks /2."""
         last = np.zeros(3, dtype=np.float32)
         if self.last_def_action is not None:
             last[int(self.last_def_action)] = 1.0
@@ -160,7 +151,6 @@ class FrictionEnv(gym.Env):
             min(self.n_blocks, 2) / 2.0,
         ], dtype=np.float32)
 
-    # ------------------------------------------------------------------ gym API
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         c = self.cfg
@@ -182,7 +172,7 @@ class FrictionEnv(gym.Env):
         self.stats = dict(genuine_value=0.0, fraud_loss=0.0, otp=0, false_blocks=0, churned=0,
                           frozen=0, fraud_txns=0, fraud_stopped=0, fraud_completed=0, genuine_txns=0,
                           takeover=int(self.takeover_step is not None), money=0.0)
-        # attacker bookkeeping (no random draws, so the scripted path is unaffected)
+        # red-team bookkeeping (no random draws, so the scripted path is unaffected)
         self.n_fraud_attempted = 0
         self.fraud_received = 0.0
         self.last_received = 0.0
@@ -229,7 +219,7 @@ class FrictionEnv(gym.Env):
             self.n_otp += 1
             self.stats["otp"] += 1
             if not is_fraud:
-                if rng.random() < c.churn_otp_base + c.churn_otp_slope * prev:
+                if rng.random() < c.churn_otp_base + c.churn_otp_slope * prev:   # OTP fatigue
                     money -= c.ltv
                     self.stats["churned"] = 1
                     terminated = True
@@ -259,9 +249,9 @@ class FrictionEnv(gym.Env):
                     terminated = True
             else:
                 self.stats["fraud_stopped"] += 1
-                if self.attacker is None:   # scripted fraudster; a learned one decides its next move itself
+                if self.attacker is None:   # a learned fraudster decides its next move itself
                     if rng.random() < c.fraud_retry_after_block:
-                        self.retry_amount_shrink = c.fraud_retry_shrink   # adaptive: probe with a smaller amount
+                        self.retry_amount_shrink = c.fraud_retry_shrink   # retry with a smaller amount
                     else:
                         self._fraud_gives_up()
             if not terminated and self.n_blocks >= c.max_blocks_before_freeze:
@@ -276,7 +266,7 @@ class FrictionEnv(gym.Env):
                 money -= loss
                 self.stats["fraud_loss"] += loss
                 self.stats["fraud_completed"] += 1
-                if attacked:   # what reaches the fraudster; stealth costs laundering. The defender's loss is unchanged.
+                if attacked:   # money the fraudster keeps; stealth costs laundering. The bank's loss is unchanged.
                     self.last_received = txn.amount * (self.acfg.stealth_received_frac if stealth else 1.0)
                     self.fraud_received += self.last_received
                     self.stats["fraud_received"] += self.last_received
@@ -287,11 +277,11 @@ class FrictionEnv(gym.Env):
 
         if (is_fraud and self.fraud_active and not terminated and self.attacker is None
                 and rng.random() > c.fraud_continue):
-            self._fraud_gives_up()   # fraudster cashes out and leaves; owner regains the account
+            self._fraud_gives_up()   # scripted fraudster cashes out; owner gets the account back
         if attacked:
             self.last_def_action = action
             if stealth and self.fraud_active and not terminated and rng.random() < self.acfg.stealth_notice_prob:
-                self._fraud_gives_up()   # the owner noticed the stealth payment: attack over
+                self._fraud_gives_up()   # the owner noticed the stealth payment
 
         self.stats["money"] += money
         self.t += 1
@@ -302,6 +292,5 @@ class FrictionEnv(gym.Env):
         info = {"stats": dict(self.stats), "was_fraud": is_fraud}
         if self.attacker is not None:
             info["fraud_received"] = self.last_received
-        # with attacker=EXTERNAL the next transaction may still await the fraudster's decision (no obs yet)
-        obs = None if self.awaiting_attack else self._obs()
+        obs = None if self.awaiting_attack else self._obs()   # EXTERNAL attacker: no next payment yet
         return obs, money / c.reward_scale, terminated, truncated, info

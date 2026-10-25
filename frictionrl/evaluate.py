@@ -1,7 +1,6 @@
 """Evaluate any policy (callable obs -> action) on held-out sessions."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from .config import SimConfig
@@ -12,8 +11,9 @@ VAL_SEED_OFFSET = 500_000_000    # validation sessions (model selection) overlap
 
 
 def run_policy(policy, n_episodes=5_000, cfg: SimConfig | None = None, source=None,
-               seed=0, log_actions=False, seed_offset=TEST_SEED_OFFSET, split="test"):
-    env = FrictionEnv(cfg, mode="continuous", source=source, split=split)
+               seed=0, log_actions=False, seed_offset=TEST_SEED_OFFSET, split="test", attacker=None):
+    """Play n_episodes sessions and return one row of stats per session (plus a decision trace if log_actions)."""
+    env = FrictionEnv(cfg, mode="continuous", source=source, split=split, attacker=attacker)
     rows, trace = [], []
     for ep in range(n_episodes):
         obs, _ = env.reset(seed=seed_offset + seed * 100_000 + ep)
@@ -24,7 +24,7 @@ def run_policy(policy, n_episodes=5_000, cfg: SimConfig | None = None, source=No
                 rel = None if env.takeover_step is None else env.t - env.takeover_step
                 trace.append(dict(ep=ep, t=env.t, action=a, fraud=int(env.fraud_active),
                                   takeover=int(env.takeover_step is not None), rel=rel))
-            obs, r, term, trunc, info = env.step(a)
+            obs, _, term, trunc, _ = env.step(a)
             done = term or trunc
         rows.append(dict(env.stats))
     df = pd.DataFrame(rows)
@@ -32,6 +32,7 @@ def run_policy(policy, n_episodes=5_000, cfg: SimConfig | None = None, source=No
 
 
 def summarize(df: pd.DataFrame) -> dict:
+    """Per-session averages and rates from run_policy's table."""
     g = df["genuine_txns"].sum()
     f = df["fraud_txns"].sum()
     return {

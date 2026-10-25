@@ -1,13 +1,6 @@
-"""Transaction sources: where the *content* of each transaction comes from.
+"""Transaction sources: what each payment looks like (synthetic, or real IEEE-CIS rows).
 
-A source only answers: "give me the next transaction for a genuine user / a fraudster".
-How users and fraudsters *react* to the agent's actions lives in env.py,
-because no dataset records those reactions (counterfactuals).
-
-Two sources:
-  * SyntheticSource  - parametric generator (default, no download needed)
-  * IEEECISSource    - replays real transaction feature rows from Kaggle's IEEE-CIS
-                       Fraud Detection data (see data/README.md)
+How users and fraudsters REACT to the agent lives in env.py, because no dataset records that.
 """
 from __future__ import annotations
 
@@ -30,8 +23,7 @@ class Txn:
 
 
 class SyntheticSource:
-    """Parametric generator. Genuine and fraud distributions overlap on purpose,
-    so a single transaction is ambiguous and the agent must use session context."""
+    """Genuine and fraud payments overlap on purpose, so one payment alone is not enough to decide."""
 
     def __init__(self, cfg: SimConfig):
         self.cfg = cfg
@@ -59,15 +51,10 @@ class SyntheticSource:
 
 
 class IEEECISSource(SyntheticSource):
-    """Replays real per-transaction features from IEEE-CIS (Kaggle).
+    """Replays real feature rows from Kaggle's IEEE-CIS data (built by data_ieee.py).
 
-    Build the feature file once with:
-        python -m frictionrl.data_ieee --raw data/ieee-fraud-detection --out data/ieee_features.npz
-    The file holds two pools of rows [log_amount_ratio, new_device, new_payee, odd_hour, burst]:
-    one from genuine transactions and one from fraud transactions. Each sampled transaction
-    is a real row; session structure and reactions remain simulated.
-    If the file also holds user_mu_<split> (per-customer mean log amount), each session's
-    typical amount is drawn from real customers; older files fall back to the synthetic range.
+    Session structure and reactions stay simulated; each payment is a real row, and each session's
+    typical amount comes from a real customer (user_mu_<split>), if the file has it.
     """
 
     def __init__(self, cfg: SimConfig, path: str = "data/ieee_features.npz", split: str = "train"):
@@ -81,7 +68,7 @@ class IEEECISSource(SyntheticSource):
         self.user_mu = d[key] if key in d.files and len(d[key]) else None
 
     def sample_user(self, rng: np.random.Generator) -> float:
-        if self.user_mu is None:
+        if self.user_mu is None:   # older feature files without per-customer amounts
             return super().sample_user(rng)
         return float(self.user_mu[rng.integers(len(self.user_mu))])
 

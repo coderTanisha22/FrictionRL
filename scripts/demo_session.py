@@ -1,4 +1,4 @@
-"""Viva demo: watch a trained agent handle one session, transaction by transaction.
+"""Viva demo: watch a trained agent handle one session with a takeover, transaction by transaction.
 
     python scripts/demo_session.py --agent dqn --seed 7
     python scripts/demo_session.py --agent rule      # compare with the rule baseline
@@ -18,8 +18,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--agent", default="dqn", choices=["dqn", "ppo", "rule"])
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--takeover", action="store_true", default=True,
-                    help="search for a session where the account gets taken over")
     a = ap.parse_args()
     if a.agent == "rule":
         policy = rule_kb
@@ -29,13 +27,13 @@ def main():
         cls = DQN if a.agent == "dqn" else PPO
         policy = SB3Policy(cls.load(f"results/models/{a.agent}_seed0_ltv3000"))
 
+    # start at --seed and move on until a session has a takeover
     env = FrictionEnv(mode="continuous", split="test")
     seed = a.seed
-    while True:
-        obs, _ = env.reset(seed=seed)
-        if not a.takeover or env.takeover_step is not None:
-            break
+    obs, _ = env.reset(seed=seed)
+    while env.takeover_step is None:
         seed += 1
+        obs, _ = env.reset(seed=seed)
     print(f"session seed={seed}  takeover at step {env.takeover_step}  (hidden from the agent)\n")
     print(f"{'t':>2} {'who':8} {'amount':>9} {'x usual':>7} {'newDev':>6} {'newPayee':>8} {'oddHr':>5} "
           f"{'burst':>5}  {'action':8} {'reward Rs':>9}")

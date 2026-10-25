@@ -24,7 +24,6 @@ from frictionrl.simulator import SyntheticSource  # noqa: E402
 
 COLS = ["log_amount_ratio", "new_device", "new_payee", "odd_hour", "burst"]
 FLAGS = COLS[1:]
-# same palette as make_figures.py
 C = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
 INK2, GRID = "#52514e", "#e6e5e0"
 plt.rcParams.update({
@@ -36,6 +35,7 @@ plt.rcParams.update({
 
 
 def synthetic_pool(kind: str, n: int, seed: int = 0) -> np.ndarray:
+    """n synthetic transactions of one kind ("genuine" or "fraud") as rows of the 5 features."""
     src, rng = SyntheticSource(SimConfig()), np.random.default_rng(seed)
     rows = []
     for _ in range(n):

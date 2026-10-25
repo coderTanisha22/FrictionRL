@@ -1,22 +1,14 @@
-"""Exploratory: a learned fraudster (automated red team) for FrictionRL.
+"""Red team: a learned fraudster that chooses its own attack, trained against a frozen defender.
 
-The scripted fraudster in env.py draws every fraudulent transaction from fixed distributions and
-decides by coin flips when to cash out or retry. Here the fraudster CHOOSES, per transaction:
-
-    action a in 0..5 -> amount level = AMOUNT_LEVELS[a // 2] x the user's usual amount,
-                        stealth = a % 2 (spoofed device + a payee the owner has paid before)
-    action 6         -> cash out / leave now (attack ends, account returns to the owner)
-
-Stealth makes a transaction look normal but costs the fraudster: a laundering haircut on what it
-receives, and a chance per transaction that the owner notices and the attack ends.
-The defender's loss on a completed fraud is unchanged (amount + chargeback).
-
-All attack parameters live in AttackConfig here; config.py (the MDP every defender was trained on)
-is not touched.
+Per fraudulent transaction the fraudster picks one of 7 actions:
+    0..5 -> amount level = amount_levels[a // 2] x the user's usual amount, stealth = a % 2
+    6    -> cash out and leave (the account goes back to the owner)
+Stealth (spoofed device + a payee the owner has paid before) raises fewer risk flags, but the fraudster
+keeps only part of the money and the owner may notice. The bank's loss is unchanged (amount + chargeback).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import gymnasium as gym
 import numpy as np
@@ -28,24 +20,14 @@ from .simulator import Txn
 N_ATTACK_ACTIONS = 7
 LEAVE = 6
 EXTERNAL = "external"   # FrictionEnv(attacker=EXTERNAL): decisions arrive later through env.apply_attack()
-FRAUD_OBS_DIM = 8
-FRAUD_OBS_NAMES = [
-    "progress",              # t / H
-    "n_fraud_attempted",     # fraudulent transactions attempted so far / 10
-    "received",              # money the fraudster has received so far / 10,000
-    "last_def_approve",      # defender's last action, one-hot
-    "last_def_otp",
-    "last_def_block",
-    "otp_failed_seen",       # an OTP has failed in this session
-    "n_blocks",              # / 2
-]
+FRAUD_OBS_DIM = 8       # see FrictionEnv.fraud_obs
 
 
 @dataclass
 class AttackConfig:
     amount_levels: tuple = (0.5, 1.0, 2.5)   # x the user's usual amount
     amount_sigma: float = 0.2                # log-normal jitter around the chosen level
-    stealth_received_frac: float = 0.6       # stealth (spoofed device + known payee) costs laundering
+    stealth_received_frac: float = 0.6       # stealth costs laundering: the fraudster keeps 60%
     stealth_notice_prob: float = 0.10        # per stealth txn, the owner notices -> attack ends
     stealth_p_new_device: float = 0.10
     stealth_p_new_payee: float = 0.15
@@ -68,41 +50,38 @@ def sample_attack_txn(rng: np.random.Generator, cfg: SimConfig, acfg: AttackConf
     lr = float(np.log(acfg.amount_levels[level]) + rng.normal(0.0, acfg.amount_sigma))
     if stealth:
         p = (acfg.stealth_p_new_device, acfg.stealth_p_new_payee, acfg.stealth_p_odd_hour, acfg.stealth_p_burst)
-    else:   # the scripted fraudster's feature probabilities
+    else:   # the scripted fraudster's flag probabilities
         p = (cfg.fraud_p_new_device, cfg.fraud_p_new_payee, cfg.fraud_p_odd_hour, cfg.fraud_p_burst)
     nd, npy, oh, b = (int(rng.random() < q) for q in p)
     return Txn(lr, float(np.exp(user_mu + lr)), nd, npy, oh, b)
 
 
 class FraudsterEnv(gym.Env):
-    """The fraudster's side of a session, against a FIXED defender (callable defender_obs -> action).
+    """The fraudster's side of a session against a FIXED defender (callable defender_obs -> action).
 
-    One episode = one FrictionEnv session with a guaranteed takeover. Owner transactions are fast-forwarded
-    (the defender acts, the fraudster does not); the fraudster acts once per fraudulent transaction and is
-    rewarded with the money it actually receives (/1000). The episode ends when the attack ends (cash out,
-    OTP lockout, owner notices, account frozen) or the session ends.
+    One episode = one session with a guaranteed takeover. The defender handles the owner's payments on its own;
+    the fraudster acts once per fraudulent payment and its reward is the money it receives / 1000.
+    The episode ends when the attack ends (cash out, OTP lockout, owner notices, frozen) or the session ends.
     """
     metadata = {"render_modes": []}
 
-    def __init__(self, defender, cfg: SimConfig | None = None, attack_cfg: AttackConfig | None = None,
-                 source: str | None = None, split: str = "train"):
+    def __init__(self, defender):
         super().__init__()
         from .env import FrictionEnv   # local import: env.py imports this module
         self.defender = defender
-        self.env = FrictionEnv(replace(cfg or SimConfig(), p_takeover=1.0), mode="continuous", source=source,
-                               split=split, attacker=EXTERNAL, attack_cfg=attack_cfg)
+        self.env = FrictionEnv(SimConfig(p_takeover=1.0), mode="continuous", attacker=EXTERNAL)
         self.action_space = spaces.Discrete(N_ATTACK_ACTIONS)
         self.observation_space = spaces.Box(0.0, 10.0, shape=(FRAUD_OBS_DIM,), dtype=np.float32)
 
     def _defender_step(self):
-        """One defender decision on the current transaction. Returns (money the fraudster received, session over)."""
+        """One defender decision on the current payment. Returns (money the fraudster received, session over)."""
         _, _, term, trunc, info = self.env.step(int(self.defender(self.env._obs())))
         return info["fraud_received"], term or trunc
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         while True:
-            # sessions where the owner leaves before the takeover have no fraud decision: draw another
+            # if the owner leaves before the takeover there is no fraud decision to make: draw another session
             self.env.reset(seed=int(self.np_random.integers(2**31)))
             over = False
             while not self.env.awaiting_attack and not over:

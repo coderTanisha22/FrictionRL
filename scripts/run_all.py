@@ -1,7 +1,7 @@
-"""Run every experiment in the report and write results/ (CSVs, JSON, figures).
+"""Run every experiment in the report and write the results folder (CSVs, JSON, models).
 
     python scripts/run_all.py            # full run (~35 min on a 2-core laptop)
-    python scripts/run_all.py --quick    # smoke test (~3 min)
+    python scripts/run_all.py --quick    # smoke test (~2 min)
     python scripts/run_all.py --source ieee --out results_ieee   # replay real IEEE-CIS transactions
 """
 from __future__ import annotations
@@ -26,8 +26,9 @@ from frictionrl.planning import (LearnedMDPEnv, TabularPolicy, iterative_model_b
                                  policy_iteration, value_iteration)
 from frictionrl.qlearning import tabular_q_learning, train_linear_q  # noqa: E402
 
+
 def sb3_job(args):
-    # everything arrives in the tuple (no globals) so this works with spawn-based multiprocessing
+    """Train and evaluate one DQN/PPO run. All inputs come in the tuple so it works in a worker process."""
     algo, steps, seed, ltv, eval_eps, out, source = args
     from frictionrl.evaluate import evaluate
     from frictionrl.train_sb3 import SB3Policy, train
@@ -46,8 +47,6 @@ def main():
     ap.add_argument("--out", default="results", help="output folder (default: results)")
     ap.add_argument("--source", default="synthetic", choices=["synthetic", "ieee"],
                     help="where transaction content comes from")
-    ap.add_argument("--deep-only", action="store_true",
-                    help="reuse baseline/tabular/linear results in results/ and rerun only DQN/PPO")
     args = ap.parse_args()
     q, OUT, SRC = args.quick, args.out, args.source
     EVAL_EPS = 1_000 if q else 5_000
@@ -58,64 +57,57 @@ def main():
     MB_EPS = 15_000 if q else 80_000
     os.makedirs(OUT, exist_ok=True)
     rows, t0 = [], time.time()
-    if args.deep_only:
-        prev = pd.read_csv(f"{OUT}/all_runs.csv")
-        rows = prev[prev.family != "deep"].to_dict("records")
-        old = json.load(open(f"{OUT}/logs.json"))
-        planning, qlogs, lin_logs = old["planning"], old["qlogs"], old["lin_logs"]
 
     def add(name, family, res, seed=0):
         rows.append(dict(agent=name, family=family, seed=seed, **{k: float(v) for k, v in res.items()}))
         print(f"[{time.time() - t0:6.0f}s] {name:22s} seed={seed} net=Rs{res['net_rs_per_session']:8.1f}", flush=True)
 
-    if not args.deep_only:
-        # ---------------------------------------------------------------- 1. baselines
-        for name, pol in BASELINES.items():
-            add(name, "baseline", summarize(run_policy(pol, EVAL_EPS, source=SRC)))
-        sweep = []
-        for tau in np.linspace(-0.5, 2.5, 13):
-            r = summarize(run_policy(AmountThreshold(tau), EVAL_EPS, source=SRC))
-            sweep.append(dict(tau=float(tau), **{k: float(v) for k, v in r.items()}))
-        pd.DataFrame(sweep).to_csv(f"{OUT}/threshold_sweep.csv", index=False)
+    # 1. baselines, and the amount threshold swept over 13 values
+    for name, pol in BASELINES.items():
+        add(name, "baseline", summarize(run_policy(pol, EVAL_EPS, source=SRC)))
+    sweep = []
+    for tau in np.linspace(-0.5, 2.5, 13):
+        r = summarize(run_policy(AmountThreshold(tau), EVAL_EPS, source=SRC))
+        sweep.append(dict(tau=float(tau), **{k: float(v) for k, v in r.items()}))
+    pd.DataFrame(sweep).to_csv(f"{OUT}/threshold_sweep.csv", index=False)
 
-        # ---------------------------------------------------------------- 2. model-based + VI + PI
-        denv = FrictionEnv(mode="discrete", source=SRC)
-        T, R, N, start, V, Q_star, pi_vi, mb_log = iterative_model_based(denv, rounds=3, episodes_per_round=MB_EPS)
-        _, _, _, vi_deltas = value_iteration(T, R)
-        _, _, pi_pi, pi_hist = policy_iteration(T, R)
-        planning = dict(model_rounds=mb_log, vi_iterations=len(vi_deltas), vi_deltas=vi_deltas[:2000],
-                        pi_iterations=len(pi_hist), pi_changes=pi_hist,
-                        vi_pi_same_policy=float((pi_vi == pi_pi).mean()))
-        np.savez(f"{OUT}/planning.npz", V=V, Q=Q_star, pi=pi_vi, N=N)
-        add("Model-based VI", "planning", summarize(run_policy(TabularPolicy(pi_vi), EVAL_EPS, source=SRC)))
+    # 2. model-based learning + value iteration + policy iteration
+    denv = FrictionEnv(mode="discrete", source=SRC)
+    T, R, N, start, V, Q_star, pi_vi, mb_log = iterative_model_based(denv, rounds=3, episodes_per_round=MB_EPS)
+    _, _, _, vi_deltas = value_iteration(T, R)
+    _, _, pi_pi, pi_hist = policy_iteration(T, R)
+    planning = dict(model_rounds=mb_log, vi_iterations=len(vi_deltas), vi_deltas=vi_deltas[:2000],
+                    pi_iterations=len(pi_hist), pi_changes=pi_hist,
+                    vi_pi_same_policy=float((pi_vi == pi_pi).mean()))
+    np.savez(f"{OUT}/planning.npz", V=V, Q=Q_star, pi=pi_vi, N=N)
+    add("Model-based VI", "planning", summarize(run_policy(TabularPolicy(pi_vi), EVAL_EPS, source=SRC)))
 
-        # ---------------------------------------------------------------- 3. tabular Q-learning
-        # 3a. sanity check: Q-learning on the learned (exactly Markov) MDP must converge to VI's Q*
-        _, _, check_log = tabular_q_learning(LearnedMDPEnv(T, R, start), TAB_EPS, explore="egreedy", seed=0,
-                                             q_star=Q_star, eval_every=max(TAB_EPS // 40, 1), alpha_min=0.0)
-        # 3b. Q-learning on the real simulator (model-free: never sees T or R)
-        qlogs = {"markov_check": check_log}
-        for explore, label in [("egreedy", "Q-learning (eps-greedy)"), ("explfn", "Q-learning (expl. fn)")]:
-            for seed in SEEDS:
-                Q, Nq, log = tabular_q_learning(FrictionEnv(mode="discrete", source=SRC), TAB_EPS, explore=explore,
-                                                seed=seed, q_star=Q_star, eval_every=max(TAB_EPS // 40, 1))
-                qlogs[f"{explore}_{seed}"] = log
-                if seed == 0:
-                    np.save(f"{OUT}/Q_{explore}.npy", Q)
-                add(label, "tabular", summarize(run_policy(TabularPolicy(Q.argmax(1)), EVAL_EPS, seed=seed,
-                                                           source=SRC)), seed)
-
-        # ---------------------------------------------------------------- 4. linear approximate Q
-        lin_logs = {}
+    # 3. tabular Q-learning. First a check: on the learned (exactly Markov) MDP it must reach VI's Q*
+    _, _, check_log = tabular_q_learning(LearnedMDPEnv(T, R, start), TAB_EPS, explore="egreedy", seed=0,
+                                         q_star=Q_star, eval_every=max(TAB_EPS // 40, 1), alpha_min=0.0)
+    qlogs = {"markov_check": check_log}
+    # then model-free on the real simulator (never sees T or R)
+    for explore, label in [("egreedy", "Q-learning (eps-greedy)"), ("explfn", "Q-learning (expl. fn)")]:
         for seed in SEEDS:
-            agent, log = train_linear_q(FrictionEnv(mode="continuous", source=SRC), LIN_EPS, seed=seed,
-                                        eval_every=max(LIN_EPS // 30, 1))
-            lin_logs[seed] = log
+            Q, _, log = tabular_q_learning(FrictionEnv(mode="discrete", source=SRC), TAB_EPS, explore=explore,
+                                           seed=seed, q_star=Q_star, eval_every=max(TAB_EPS // 40, 1))
+            qlogs[f"{explore}_{seed}"] = log
             if seed == 0:
-                json.dump(agent.weight_table(), open(f"{OUT}/linear_q_weights.json", "w"), indent=1, default=float)
-            add("Linear approx. Q", "approx", summarize(run_policy(agent, EVAL_EPS, seed=seed, source=SRC)), seed)
+                np.save(f"{OUT}/Q_{explore}.npy", Q)
+            add(label, "tabular", summarize(run_policy(TabularPolicy(Q.argmax(1)), EVAL_EPS, seed=seed,
+                                                       source=SRC)), seed)
 
-    # ---------------------------------------------------------------- 5. DQN + PPO (+ LTV sensitivity)
+    # 4. linear approximate Q-learning
+    lin_logs = {}
+    for seed in SEEDS:
+        agent, log = train_linear_q(FrictionEnv(mode="continuous", source=SRC), LIN_EPS, seed=seed,
+                                    eval_every=max(LIN_EPS // 30, 1))
+        lin_logs[seed] = log
+        if seed == 0:
+            json.dump(agent.weight_table(), open(f"{OUT}/linear_q_weights.json", "w"), indent=1, default=float)
+        add("Linear approx. Q", "approx", summarize(run_policy(agent, EVAL_EPS, seed=seed, source=SRC)), seed)
+
+    # 5. DQN and PPO in parallel, plus PPO retrained with other customer lifetime values
     jobs = [(a, SB3_STEPS, s, 3000.0, EVAL_EPS, OUT, SRC) for a in ("dqn", "ppo") for s in SEEDS]
     if not q:
         jobs += [("ppo", SB3_STEPS, 0, ltv, EVAL_EPS, OUT, SRC) for ltv in (1000.0, 8000.0)]
@@ -128,7 +120,7 @@ def main():
             sens.append(dict(algo=algo, seed=seed, ltv=ltv, **{k: float(v) for k, v in res.items()}))
     pd.DataFrame(sens).to_csv(f"{OUT}/sensitivity_ltv.csv", index=False)
 
-    # ---------------------------------------------------------------- 6. behaviour trace of best deep agent
+    # 6. every decision of the best deep agent, for the behaviour figure
     from stable_baselines3 import DQN, PPO
     from frictionrl.train_sb3 import SB3Policy
     df = pd.DataFrame(rows)
@@ -138,7 +130,6 @@ def main():
     _, trace = run_policy(SB3Policy(model), EVAL_EPS, log_actions=True, source=SRC)
     trace.to_csv(f"{OUT}/behaviour_trace_{best}.csv", index=False)
 
-    # ---------------------------------------------------------------- save
     df.to_csv(f"{OUT}/all_runs.csv", index=False)
     summ = df.groupby(["agent", "family"], sort=False).agg(["mean", "std"]).drop(columns="seed")
     summ.to_csv(f"{OUT}/summary.csv")
