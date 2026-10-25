@@ -23,7 +23,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from .attacker import LEAVE, AttackConfig, sample_attack_txn
+from .attacker import EXTERNAL, LEAVE, AttackConfig, sample_attack_txn
 from .config import APPROVE, BLOCK, OBS_DIM, OTP, SimConfig
 from .simulator import make_source
 
@@ -87,23 +87,35 @@ class FrictionEnv(gym.Env):
             self.observation_space = spaces.Discrete(N_DISCRETE_STATES)
 
     # ------------------------------------------------------------------ helpers
-    def _attacker_txn(self):
-        """Ask the learned fraudster what to do next. Returns its transaction, or None if it cashes out."""
-        a = int(self.attacker(self.fraud_obs()))
+    def apply_attack(self, a):
+        """The fraudster's decision for the pending transaction (0..5 = amount/stealth, 6 = cash out and leave).
+        Called right away for a callable attacker, or later by attacker.FraudsterEnv (attacker=EXTERNAL)."""
+        assert self.awaiting_attack, "no fraudulent transaction is waiting for a decision"
+        self.awaiting_attack = False
+        a = int(a)
         self.stats["attack_actions"].append(a)
         if a == LEAVE:
             self._fraud_gives_up()      # cash out and leave: the owner makes this payment
-            return None
-        self.attack_action = a
-        self.n_fraud_attempted += 1
-        return sample_attack_txn(self.np_random, self.cfg, self.acfg, self.user_mu, a)
+            txn = self.src.genuine(self.np_random, self.user_mu)
+        else:
+            self.attack_action = a
+            self.n_fraud_attempted += 1
+            txn = sample_attack_txn(self.np_random, self.cfg, self.acfg, self.user_mu, a)
+        self._set_txn(txn)
+
+    def _set_txn(self, txn):
+        self.txn = txn
+        self.n_seen += 1
+        self.n_risky += int(txn.new_device or txn.new_payee)
 
     def _new_txn(self):
         if self.fraud_active and self.attacker is not None:
-            txn = self._attacker_txn()
-            if txn is None:
-                txn = self.src.genuine(self.np_random, self.user_mu)
-        elif self.fraud_active:
+            self.awaiting_attack = True
+            self.txn = None
+            if self.attacker != EXTERNAL:
+                self.apply_attack(self.attacker(self.fraud_obs()))
+            return
+        if self.fraud_active:
             if self.retry_amount_shrink is not None:
                 txn = self.src.fraud(self.np_random, self.user_mu)
                 txn.log_amount_ratio = float(self.last_fraud_lr + np.log(self.retry_amount_shrink))
@@ -114,9 +126,7 @@ class FrictionEnv(gym.Env):
             self.last_fraud_lr = txn.log_amount_ratio
         else:
             txn = self.src.genuine(self.np_random, self.user_mu)
-        self.txn = txn
-        self.n_seen += 1
-        self.n_risky += int(txn.new_device or txn.new_payee)
+        self._set_txn(txn)
 
     def _obs_vec(self) -> np.ndarray:
         t = self.txn
@@ -178,6 +188,7 @@ class FrictionEnv(gym.Env):
         self.last_received = 0.0
         self.last_def_action = None
         self.attack_action = None
+        self.awaiting_attack = False
         if self.attacker is not None:
             self.stats.update(fraud_received=0.0, attack_actions=[])
         self._maybe_takeover()
@@ -291,4 +302,6 @@ class FrictionEnv(gym.Env):
         info = {"stats": dict(self.stats), "was_fraud": is_fraud}
         if self.attacker is not None:
             info["fraud_received"] = self.last_received
-        return self._obs(), money / c.reward_scale, terminated, truncated, info
+        # with attacker=EXTERNAL the next transaction may still await the fraudster's decision (no obs yet)
+        obs = None if self.awaiting_attack else self._obs()
+        return obs, money / c.reward_scale, terminated, truncated, info
