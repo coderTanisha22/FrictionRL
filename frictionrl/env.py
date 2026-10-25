@@ -23,6 +23,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from .attacker import LEAVE, AttackConfig, sample_attack_txn
 from .config import APPROVE, BLOCK, OBS_DIM, OTP, SimConfig
 from .simulator import make_source
 
@@ -68,13 +69,17 @@ class FrictionEnv(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, cfg: SimConfig | None = None, mode: str = "continuous",
-                 source: str | None = None, split: str = "train"):
+                 source: str | None = None, split: str = "train", attacker=None, attack_cfg=None):
         super().__init__()
         # transaction source: "synthetic" (default) or "ieee"; can be set with env var FRICTIONRL_SOURCE
         source = source or os.environ.get("FRICTIONRL_SOURCE", "synthetic")
         self.cfg = cfg or SimConfig()
         self.mode = mode
         self.src = make_source(source, self.cfg, split)
+        # Exploratory red team (attacker.py): attacker is a callable fraud_obs -> action in 0..6 that replaces
+        # the scripted fraudster's choices. attacker=None keeps the original environment exactly.
+        self.attacker = attacker
+        self.acfg = attack_cfg or (AttackConfig() if attacker is not None else None)
         self.action_space = spaces.Discrete(3)
         if mode == "continuous":
             self.observation_space = spaces.Box(-3.0, 4.0, shape=(OBS_DIM,), dtype=np.float32)
@@ -82,8 +87,23 @@ class FrictionEnv(gym.Env):
             self.observation_space = spaces.Discrete(N_DISCRETE_STATES)
 
     # ------------------------------------------------------------------ helpers
+    def _attacker_txn(self):
+        """Ask the learned fraudster what to do next. Returns its transaction, or None if it cashes out."""
+        a = int(self.attacker(self.fraud_obs()))
+        self.stats["attack_actions"].append(a)
+        if a == LEAVE:
+            self._fraud_gives_up()      # cash out and leave: the owner makes this payment
+            return None
+        self.attack_action = a
+        self.n_fraud_attempted += 1
+        return sample_attack_txn(self.np_random, self.cfg, self.acfg, self.user_mu, a)
+
     def _new_txn(self):
-        if self.fraud_active:
+        if self.fraud_active and self.attacker is not None:
+            txn = self._attacker_txn()
+            if txn is None:
+                txn = self.src.genuine(self.np_random, self.user_mu)
+        elif self.fraud_active:
             if self.retry_amount_shrink is not None:
                 txn = self.src.fraud(self.np_random, self.user_mu)
                 txn.log_amount_ratio = float(self.last_fraud_lr + np.log(self.retry_amount_shrink))
@@ -116,6 +136,20 @@ class FrictionEnv(gym.Env):
         v = self._obs_vec()
         return v if self.mode == "continuous" else discretize(v)
 
+    def fraud_obs(self) -> np.ndarray:
+        """What the fraudster sees (attacker.FRAUD_OBS_NAMES): its own progress and the defender's reactions."""
+        last = np.zeros(3, dtype=np.float32)
+        if self.last_def_action is not None:
+            last[int(self.last_def_action)] = 1.0
+        return np.array([
+            self.t / self.cfg.horizon,
+            min(self.n_fraud_attempted, 10) / 10.0,
+            min(self.fraud_received / 10_000.0, 10.0),
+            *last,
+            float(self.otp_failed),
+            min(self.n_blocks, 2) / 2.0,
+        ], dtype=np.float32)
+
     # ------------------------------------------------------------------ gym API
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -138,6 +172,14 @@ class FrictionEnv(gym.Env):
         self.stats = dict(genuine_value=0.0, fraud_loss=0.0, otp=0, false_blocks=0, churned=0,
                           frozen=0, fraud_txns=0, fraud_stopped=0, fraud_completed=0, genuine_txns=0,
                           takeover=int(self.takeover_step is not None), money=0.0)
+        # attacker bookkeeping (no random draws, so the scripted path is unaffected)
+        self.n_fraud_attempted = 0
+        self.fraud_received = 0.0
+        self.last_received = 0.0
+        self.last_def_action = None
+        self.attack_action = None
+        if self.attacker is not None:
+            self.stats.update(fraud_received=0.0, attack_actions=[])
         self._maybe_takeover()
         self._new_txn()
         return self._obs(), {}
@@ -155,6 +197,9 @@ class FrictionEnv(gym.Env):
     def step(self, action):
         c, rng, txn = self.cfg, self.np_random, self.txn
         is_fraud = self.fraud_active
+        attacked = is_fraud and self.attacker is not None      # this txn was chosen by the learned fraudster
+        stealth = attacked and self.attack_action % 2 == 1
+        self.last_received = 0.0
         money = 0.0
         completed = False
         terminated = False
@@ -203,10 +248,11 @@ class FrictionEnv(gym.Env):
                     terminated = True
             else:
                 self.stats["fraud_stopped"] += 1
-                if rng.random() < c.fraud_retry_after_block:
-                    self.retry_amount_shrink = c.fraud_retry_shrink   # adaptive: probe with a smaller amount
-                else:
-                    self._fraud_gives_up()
+                if self.attacker is None:   # scripted fraudster; a learned one decides its next move itself
+                    if rng.random() < c.fraud_retry_after_block:
+                        self.retry_amount_shrink = c.fraud_retry_shrink   # adaptive: probe with a smaller amount
+                    else:
+                        self._fraud_gives_up()
             if not terminated and self.n_blocks >= c.max_blocks_before_freeze:
                 terminated = True
                 self.stats["frozen"] = 1
@@ -219,13 +265,22 @@ class FrictionEnv(gym.Env):
                 money -= loss
                 self.stats["fraud_loss"] += loss
                 self.stats["fraud_completed"] += 1
+                if attacked:   # what reaches the fraudster; stealth costs laundering. The defender's loss is unchanged.
+                    self.last_received = txn.amount * (self.acfg.stealth_received_frac if stealth else 1.0)
+                    self.fraud_received += self.last_received
+                    self.stats["fraud_received"] += self.last_received
             else:
                 v = c.fee_rate * txn.amount
                 money += v
                 self.stats["genuine_value"] += v
 
-        if is_fraud and self.fraud_active and not terminated and rng.random() > c.fraud_continue:
+        if (is_fraud and self.fraud_active and not terminated and self.attacker is None
+                and rng.random() > c.fraud_continue):
             self._fraud_gives_up()   # fraudster cashes out and leaves; owner regains the account
+        if attacked:
+            self.last_def_action = action
+            if stealth and self.fraud_active and not terminated and rng.random() < self.acfg.stealth_notice_prob:
+                self._fraud_gives_up()   # the owner noticed the stealth payment: attack over
 
         self.stats["money"] += money
         self.t += 1
@@ -234,4 +289,6 @@ class FrictionEnv(gym.Env):
             self._maybe_takeover()
             self._new_txn()
         info = {"stats": dict(self.stats), "was_fraud": is_fraud}
+        if self.attacker is not None:
+            info["fraud_received"] = self.last_received
         return self._obs(), money / c.reward_scale, terminated, truncated, info
